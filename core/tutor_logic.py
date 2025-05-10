@@ -141,16 +141,10 @@ def generate_explanation_logic() -> Optional[str]:
     st.session_state から必要な情報を取得する。
     """
     clarified_request = st.session_state.get("clarified_request_text")
-    # 曖昧でなかった場合は、初期分析のサマリーを使う
     if not clarified_request and st.session_state.get("initial_analysis_result"):
-        initial_summary = st.session_state.initial_analysis_result.get("summary")
-        if initial_summary:
-            clarified_request = initial_summary
-        else: # サマリーもなければ元のクエリ
-            clarified_request = st.session_state.get("user_query_text", "不明なリクエスト")
-    elif not clarified_request: # それでもなければ
+        clarified_request = st.session_state.initial_analysis_result.get("summary", st.session_state.user_query_text)
+    elif not clarified_request:
          clarified_request = st.session_state.get("user_query_text", "不明なリクエスト")
-
 
     request_category = "不明"
     if st.session_state.get("initial_analysis_result"):
@@ -158,18 +152,16 @@ def generate_explanation_logic() -> Optional[str]:
     
     explanation_style = st.session_state.get("selected_explanation_style", "detailed")
     
-    # 関連コンテキスト (OCR結果など)
     relevant_context_ocr = None
     if st.session_state.get("initial_analysis_result"):
-        relevant_context_ocr = st.session_state.initial_analysis_result.get("ocr_text")
-    
-    # 会話履歴の要約 (簡易的に直近数件のメッセージ、または明確化ループの履歴など)
-    # 今回は明確化が完了した時点での全メッセージ履歴を渡してみる (トークン数に注意)
-    # より高度な場合は、関連性の高い部分だけを抽出・要約する
-    conversation_history_for_llm = st.session_state.get("messages", [])
-    # トークン数削減のため、システムメッセージは除外しても良いかもしれない
-    # conversation_history_for_llm = [msg for msg in conversation_history_for_llm if msg["role"] != "system"]
+        relevant_context_ocr = st.session_state.initial_analysis_result.get("ocr_text_from_extraction") # 前回の修正でキー名変更
+        if not relevant_context_ocr: # フォールバック
+            relevant_context_ocr = st.session_state.initial_analysis_result.get("ocr_text")
 
+    # 解説生成のコンテキストとして渡す会話履歴
+    # プロンプトの指示通り、スタイル選択までのやり取りを含める
+    # (ユーザーがスタイルを選択したメッセージも含む)
+    conversation_history_for_llm = st.session_state.get("messages", [])
 
     if not clarified_request or clarified_request == "不明なリクエスト":
         print("Error in tutor_logic: Clarified request is missing for explanation generation.")
@@ -180,11 +172,10 @@ def generate_explanation_logic() -> Optional[str]:
         clarified_request=clarified_request,
         request_category=request_category,
         explanation_style=explanation_style,
-        relevant_context=relevant_context_ocr, # OCRテキストをコンテキストとして渡す
-        conversation_history=conversation_history_for_llm # これまでの会話履歴
+        relevant_context=relevant_context_ocr,
+        conversation_history=conversation_history_for_llm
     )
     print(f"Tutor Logic: Generated explanation (first 100 chars): {explanation_text[:100] if explanation_text else 'None'}")
-    
     return explanation_text
 
 def generate_followup_response_logic(user_latest_input: str) -> Optional[str]:

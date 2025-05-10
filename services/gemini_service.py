@@ -281,43 +281,48 @@ def generate_explanation_llm(
     """
     明確化されたリクエストと選択されたスタイルに基づき、解説をLLMに生成させる。
     """
-    prompt_template = load_prompt_template("generate_explanation")  # ★ キーで指定 ★
+    prompt_template = load_prompt_template("generate_explanation") # config経由
     if prompt_template is None:
+        print("Error: Generate explanation prompt template could not be loaded.")
         return "システムエラー: 解説生成プロンプトを読み込めませんでした。"
 
-    style_instructions = ""
-    if explanation_style == "detailed":
-        style_instructions = "このリクエストに対して、関連するルール、定義、具体例、ステップバイステップの手順などを網羅的に、しかし段階的に分かりやすく説明してください。必要であれば、関連する文法事項や語彙についても触れてください。"
-    elif explanation_style == "hint":
-        style_instructions = "このリクエストを解決するための、核心に迫るヒントや手がかりを1つか2つ提示してください。直接的な答えや詳細な説明は避け、生徒自身が考えるきっかけとなるようにしてください。"
-    elif explanation_style == "socratic":
-        style_instructions = "このリクエストについて生徒自身の思考を促すような、核心的な理解を問う質問をいくつか投げかけてください。生徒が自ら答えにたどり着くための誘導的な問いかけを、段階的に行ってください。"
-    else:
-        style_instructions = "このリクエストに対して、関連するルール、定義、具体例、ステップバイステップの手順などを網羅的に、しかし段階的に分かりやすく説明してください。"
-
-    history_summary_text = "\n".join([f"{msg['role']}: {msg['content']}" for msg in conversation_history]) if conversation_history else "なし"
-    context_text = relevant_context if relevant_context else "なし"
+    # 会話履歴をテキスト形式に整形
+    # このプロンプトでは、直近のやり取り（スタイル選択まで）が重要
+    history_text_for_prompt = ""
+    if conversation_history:
+        for message in conversation_history:
+            # システムメッセージや、解説生成に直接関係ない長すぎる履歴は省略も検討
+            if message["role"] == "system": continue
+            role_display = "生徒" if message["role"] == "user" else "AI"
+            history_text_for_prompt += f"{role_display}: {message['content']}\n"
+    if not history_text_for_prompt:
+        history_text_for_prompt = "（これまでの会話はありません）"
+        
+    context_text_to_pass = relevant_context if relevant_context else "なし"
 
     try:
         prompt = prompt_template.format(
             clarified_request=clarified_request,
             request_category=request_category,
             explanation_style=explanation_style,
-            relevant_context=context_text,
-            conversation_history_summary=history_summary_text,
-            style_specific_instructions=style_instructions
+            relevant_context=context_text_to_pass,
+            conversation_history=history_text_for_prompt.strip()
         )
     except KeyError as e:
+        print(f"Error formatting explanation prompt. Missing key: {e}")
         return f"システムエラー: プロンプトのフォーマットに失敗しました (キー不足: {e})。"
 
     response_text = call_gemini_api(
         prompt,
-        model_name=TEXT_MODEL_NAME,  # 明示的に指定
+        model_name=TEXT_MODEL_NAME, # 解説生成はテキストモデルで
         is_json_output=False
     )
+
     if response_text is None or isinstance(response_text, dict):
          return "AIが解説を生成できませんでした。"
+    
     return response_text.strip()
+
 
 def generate_followup_response_llm(
         conversation_history: List[Dict[str, str]],
