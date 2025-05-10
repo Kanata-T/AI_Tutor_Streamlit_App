@@ -128,19 +128,114 @@ elif current_step == state_manager.STEP_INITIAL_ANALYSIS:
     
     # 次のステップに進むためのボタンなどをここに配置しても良い (例: エラー時に再試行ボタン)
 
-# 会話履歴の表示 (常に表示する部分)
+elif current_step == state_manager.STEP_CLARIFICATION_NEEDED:
+    st.header("3. ご質問の明確化")
+
+    # AIからの明確化質問がまだ表示されていなければ生成・表示
+    needs_clarification_q_generation = True
+    if st.session_state.messages:
+        last_message = st.session_state.messages[-1]
+        if last_message["role"] == "assistant":
+            needs_clarification_q_generation = False
+
+    if needs_clarification_q_generation and not st.session_state.get("processing", False):
+        state_manager.set_processing_status(True)
+        with st.spinner("AIが確認のための質問を準備中です..."):
+            question_from_ai = tutor_logic.generate_clarification_question_logic()
+        state_manager.set_processing_status(False)
+
+        if question_from_ai and "システムエラー" not in question_from_ai and "生成できませんでした" not in question_from_ai:
+            state_manager.add_message("assistant", question_from_ai)
+            st.rerun()
+        else:
+            error_msg = question_from_ai or "明確化のための質問を生成できませんでした。"
+            state_manager.add_message("system", f"エラー: {error_msg}")
+            st.error(error_msg)
+
+elif current_step == state_manager.STEP_SELECT_STYLE:
+    st.header("4. 解説スタイルを選択してください")
+
+    # ユーザーに明確化されたリクエスト内容を表示 (確認のため)
+    if st.session_state.clarified_request_text:
+        st.info(f"明確化されたご要望: 「{st.session_state.clarified_request_text}」")
+    elif st.session_state.initial_analysis_result and not st.session_state.is_request_ambiguous:
+        # 初期分析で曖昧でなかった場合
+        st.info(f"ご要望: 「{st.session_state.initial_analysis_result.get('summary', st.session_state.user_query_text)}」")
+    else:
+        st.warning("解説対象のリクエストが不明です。最初からやり直してください。")
+        if st.button("最初に戻る"):
+            state_manager.reset_for_new_session()
+            st.rerun()
+        st.stop()
+
+    style_options = {
+        "detailed": "詳しく解説 (Detailed)",
+        "hint": "ヒントのみ (Hint Only)",
+        "socratic": "ソクラテス的対話 (Socratic Questioning)"
+    }
+    
+    # 現在選択されているスタイルを取得
+    current_selected_style_key = st.session_state.get("selected_explanation_style", "detailed")
+    # style_optionsのキーのリストを取得し、現在のスタイルのインデックスを見つける
+    options_keys = list(style_options.keys())
+    current_index = options_keys.index(current_selected_style_key) if current_selected_style_key in options_keys else 0
+
+    selected_style_key = st.radio(
+        "希望する解説のスタイルを選んでください:",
+        options=options_keys, # 辞書のキーをオプションとして渡す
+        format_func=lambda key: style_options[key], # 表示は辞書のバリューを使う
+        index=current_index, # デフォルトで選択されている項目
+        horizontal=True,
+    )
+
+    if st.button("このスタイルで解説を生成する"):
+        state_manager.set_explanation_style(selected_style_key)
+        state_manager.add_message("user", f"解説スタイルとして「{style_options[selected_style_key]}」を選択しました。")
+        state_manager.set_current_step(state_manager.STEP_GENERATE_EXPLANATION)
+        st.rerun()
+
+# --- 会話履歴の表示 (変更なし) ---
 if st.session_state.messages:
     st.subheader("会話履歴")
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-# チャット入力 (フォローアップ用、今はまだ機能しない)
-# prompt = st.chat_input("追加の質問や返答があれば入力してください...")
-# if prompt:
-#    # ... (省略) ...
+# --- チャット入力 (ユーザーが応答や追加質問をするためのもの) ---
+if current_step in [state_manager.STEP_CLARIFICATION_NEEDED, state_manager.STEP_FOLLOW_UP_LOOP]:
+    user_response = st.chat_input("AIへの返答や追加の質問を入力してください...")
+    if user_response:
+        state_manager.add_message("user", user_response)
+        # state_manager.add_clarification_history_message("user", user_response) # 専用履歴
 
-# デバッグ用にセッションステートを表示
+        if current_step == state_manager.STEP_CLARIFICATION_NEEDED:
+            # ユーザーが明確化質問に応答したので、その応答を分析する
+            state_manager.set_processing_status(True)
+            with st.spinner("AIが応答を分析中です..."):
+                clarification_analysis_result = tutor_logic.analyze_user_clarification_logic(user_response)
+            state_manager.set_processing_status(False)
+
+            if clarification_analysis_result:
+                if "error" in clarification_analysis_result:
+                    st.error(f"応答分析エラー: {clarification_analysis_result['error']}")
+                    state_manager.add_message("system", f"エラー: {clarification_analysis_result['error']}")
+                else:
+                    state_manager.store_clarification_analysis(clarification_analysis_result)
+                    if not st.session_state.is_request_ambiguous:
+                        success_msg = f"ありがとうございます、理解が深まりました！明確化されたご要望: 「{st.session_state.clarified_request_text}」"
+                        state_manager.add_message("assistant", success_msg)
+                        state_manager.set_current_step(state_manager.STEP_SELECT_STYLE)
+                    else:
+                        remaining_issue_msg = st.session_state.initial_analysis_result.get("reason_for_ambiguity", "もう少し情報が必要です。")
+                        state_manager.add_message("assistant", f"ありがとうございます。ただ、「{remaining_issue_msg}」という点がまだ気になります。")
+                st.rerun()
+            else:
+                st.error("応答分析処理中に予期せぬエラーが発生しました。")
+                state_manager.add_message("system", "エラー: 応答分析中に予期せぬエラー。")
+        # elif current_step == state_manager.STEP_FOLLOW_UP_LOOP:
+            # ...
+
+# --- デバッグ情報 (変更なし) ---
 with st.sidebar:
     st.header("デバッグ情報 (Session State)")
     st.json(st.session_state)

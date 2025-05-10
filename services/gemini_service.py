@@ -139,9 +139,130 @@ def analyze_initial_input(
     )
     return result
 
-# --- 今後追加するLLM呼び出し関数 ---
-# def generate_clarification_question_llm(...)
-# def analyze_user_clarification_llm(...)
-# def generate_explanation_llm(...)
-# def generate_followup_response_llm(...)
-# def generate_summary_llm(...)
+def analyze_user_clarification_llm(
+        original_query_text: str,
+        original_image_provided: bool,
+        reason_for_ambiguity: str,
+        llm_clarification_question: str,
+        user_response_text: str
+    ) -> Optional[Dict[str, Any]]:
+    """
+    ユーザーの明確化応答を分析し、曖昧さが解消されたか判定する。
+    """
+    prompt_template = load_prompt_template("analyze_clarification_response")
+    if prompt_template is None:
+        print("Error: Analyze clarification response prompt template could not be loaded.")
+        return {"error": "システムエラー: 応答分析プロンプトを読み込めませんでした。"}
+
+    original_image_info_text = "(画像も提供されていました)" if original_image_provided else "(画像はありませんでした)"
+
+    try:
+        prompt = prompt_template.format(
+            original_user_query=original_query_text,
+            original_image_info=original_image_info_text,
+            reason_for_ambiguity=reason_for_ambiguity,
+            llm_clarification_question=llm_clarification_question,
+            user_response_text=user_response_text
+        )
+    except KeyError as e:
+        print(f"Error formatting analyze clarification response prompt. Missing key: {e}")
+        return {"error": f"システムエラー: プロンプトのフォーマットに失敗しました (キー不足: {e})。"}
+
+    # この応答はJSON形式を期待する
+    result = call_gemini_api(
+        prompt,
+        model_name=TEXT_MODEL_NAME,
+        is_json_output=True
+    )
+    return result
+
+def generate_clarification_question_llm(
+        original_query_text: str,
+        reason_for_ambiguity: str,
+        image_provided: bool # 元の質問に画像があったかどうか
+    ) -> Optional[str]:
+    """
+    曖昧なユーザーの質問に対して、明確化のための質問をLLMに生成させる。
+    """
+    prompt_template = load_prompt_template("clarification_question")
+    if prompt_template is None:
+        print("Error: Clarification question prompt template could not be loaded.")
+        return "システムエラー: 明確化質問プロンプトを読み込めませんでした。" # エラーメッセージを返す
+
+    original_image_info_text = "(画像も提供されています)" if image_provided else ""
+
+    try:
+        prompt = prompt_template.format(
+            original_user_query=original_query_text,
+            original_image_info=original_image_info_text,
+            reason_for_ambiguity=reason_for_ambiguity
+        )
+    except KeyError as e:
+        print(f"Error formatting clarification prompt. Missing key: {e}")
+        return f"システムエラー: プロンプトのフォーマットに失敗しました (キー不足: {e})。"
+
+    # この場合、応答は単純なテキストを期待する
+    response_text = call_gemini_api(
+        prompt,
+        model_name=TEXT_MODEL_NAME, # テキスト生成モデル
+        is_json_output=False
+    )
+
+    if response_text is None or isinstance(response_text, dict): # dictはエラーの場合
+         return "AIが明確化のための質問を生成できませんでした。もう一度試しますか？"
+    
+    return response_text.strip()
+
+def generate_explanation_llm(
+        clarified_request: str,
+        request_category: str,
+        explanation_style: str,
+        relevant_context: Optional[str] = None, # OCR結果など
+        conversation_history: Optional[List[Dict[str,str]]] = None # 要約された会話履歴
+    ) -> Optional[str]:
+    """
+    明確化されたリクエストと選択されたスタイルに基づき、解説をLLMに生成させる。
+    """
+    prompt_template = load_prompt_template("generate_explanation")
+    if prompt_template is None:
+        print("Error: Generate explanation prompt template could not be loaded.")
+        return "システムエラー: 解説生成プロンプトを読み込めませんでした。"
+
+    # スタイルに応じた具体的な指示を生成
+    style_instructions = ""
+    if explanation_style == "detailed":
+        style_instructions = "このリクエストに対して、関連するルール、定義、具体例、ステップバイステップの手順などを網羅的に、しかし段階的に分かりやすく説明してください。必要であれば、関連する文法事項や語彙についても触れてください。"
+    elif explanation_style == "hint":
+        style_instructions = "このリクエストを解決するための、核心に迫るヒントや手がかりを1つか2つ提示してください。直接的な答えや詳細な説明は避け、生徒自身が考えるきっかけとなるようにしてください。"
+    elif explanation_style == "socratic":
+        style_instructions = "このリクエストについて生徒自身の思考を促すような、核心的な理解を問う質問をいくつか投げかけてください。生徒が自ら答えにたどり着くための誘導的な問いかけを、段階的に行ってください。"
+    else: # デフォルトは詳細解説
+        style_instructions = "このリクエストに対して、関連するルール、定義、具体例、ステップバイステップの手順などを網羅的に、しかし段階的に分かりやすく説明してください。"
+
+    history_summary_text = "\n".join([f"{msg['role']}: {msg['content']}" for msg in conversation_history]) if conversation_history else "なし"
+    context_text = relevant_context if relevant_context else "なし"
+
+
+    try:
+        prompt = prompt_template.format(
+            clarified_request=clarified_request,
+            request_category=request_category,
+            explanation_style=explanation_style, # スタイル名自体も渡す
+            relevant_context=context_text,
+            conversation_history_summary=history_summary_text,
+            style_specific_instructions=style_instructions
+        )
+    except KeyError as e:
+        print(f"Error formatting explanation prompt. Missing key: {e}")
+        return f"システムエラー: プロンプトのフォーマットに失敗しました (キー不足: {e})。"
+
+    response_text = call_gemini_api(
+        prompt,
+        model_name=TEXT_MODEL_NAME,
+        is_json_output=False # 解説はマークダウン形式のテキストを期待
+    )
+
+    if response_text is None or isinstance(response_text, dict): # dictはエラーの場合
+         return "AIが解説を生成できませんでした。"
+    
+    return response_text.strip()

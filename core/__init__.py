@@ -7,7 +7,10 @@ from .state_manager import (
     store_user_input,
     store_initial_analysis_result,
     set_processing_status,
+    set_explanation_style,
     reset_for_new_session,
+    store_clarification_analysis,       # ステップ8で追加した関数
+    add_clarification_history_message,  # ステップ8で追加した関数 (オプション)
     # ステップ定数もエクスポートしておくと便利
     STEP_INPUT_SUBMISSION,
     STEP_INITIAL_ANALYSIS,
@@ -20,4 +23,8 @@ from .state_manager import (
     STEP_SUMMARIZE,
     STEP_SESSION_END
 )
-from .tutor_logic import perform_initial_analysis_logic
+from .tutor_logic import (
+    perform_initial_analysis_logic,
+    generate_clarification_question_logic, # これが重要
+    analyze_user_clarification_logic
+)

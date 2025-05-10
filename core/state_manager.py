@@ -90,18 +90,28 @@ def reset_for_new_session():
     # initialize_session_state() を再度呼び出して、すべてのキーがデフォルト値を持つことを保証する
     initialize_session_state()
 
+def store_clarification_analysis(analysis_data: Dict[str, Any]):
+    """明確化応答の分析結果を保存する"""
+    if "resolved" in analysis_data and analysis_data["resolved"]:
+        st.session_state.is_request_ambiguous = False
+        st.session_state.clarified_request_text = analysis_data.get("clarified_request", "不明（明確化成功）")
+        # clarification_history にも最終的な明確化リクエストを記録しても良い
+    else: # resolved が false またはキーが存在しない場合
+        st.session_state.is_request_ambiguous = True # 依然として曖昧
+        # reason_for_ambiguity を更新しても良いかもしれない (remaining_issue を基に)
+        if "remaining_issue" in analysis_data and analysis_data["remaining_issue"]:
+             # initial_analysis_result が辞書であることを保証
+            if not isinstance(st.session_state.initial_analysis_result, dict):
+                st.session_state.initial_analysis_result = {}
+            st.session_state.initial_analysis_result["reason_for_ambiguity"] = analysis_data["remaining_issue"]
 
-# --- 今後追加する可能性のある関数 ---
-# def get_user_query() -> Dict[str, Any]:
-#     return {
-#         "text": st.session_state.user_query_text,
-#         "image_data": st.session_state.uploaded_file_data,
-#         "topic": st.session_state.selected_topic
-#     }
+def add_clarification_history_message(role: str, content: str):
+    """明確化ループ専用の会話履歴にメッセージを追加する (オプション)"""
+    if "clarification_history" not in st.session_state:
+        st.session_state.clarification_history = []
+    st.session_state.clarification_history.append({"role": role, "content": content})
 
-# def add_clarification_message(role: str, content: str):
-#     st.session_state.clarification_history.append({"role": role, "content": content})
 
-# def set_clarified_request(request_text: str):
-#    st.session_state.clarified_request_text = request_text
-#    st.session_state.is_request_ambiguous = False # 明確化された
+def set_explanation_style(style: str):
+    """選択された解説スタイルを保存する"""
+    st.session_state.selected_explanation_style = style
