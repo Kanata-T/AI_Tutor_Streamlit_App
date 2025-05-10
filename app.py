@@ -194,46 +194,87 @@ elif current_step == state_manager.STEP_SELECT_STYLE:
         state_manager.set_current_step(state_manager.STEP_GENERATE_EXPLANATION)
         st.rerun()
 
+elif current_step == state_manager.STEP_GENERATE_EXPLANATION:
+    st.header("5. 解説生成中...")
+
+    # このステップに入ったら一度だけ解説を生成する (st.rerun対策)
+    # current_explanationがNoneで、かつ処理中でない場合に実行
+    if st.session_state.current_explanation is None and not st.session_state.get("processing", False):
+        state_manager.set_processing_status(True)
+        with st.spinner("AIが解説を準備中です... しばらくお待ちください。"):
+            explanation = tutor_logic.generate_explanation_logic()
+        state_manager.set_processing_status(False)
+
+        if explanation and "システムエラー" not in explanation and "生成できませんでした" not in explanation:
+            state_manager.store_generated_explanation(explanation)
+            # 解説表示は会話履歴を通じて行われるので、ここでは次のステップへの遷移のみ
+            state_manager.set_current_step(state_manager.STEP_FOLLOW_UP_LOOP) # 次はフォローアップループへ
+            st.rerun() # 解説を会話履歴に表示するために再描画
+        else:
+            error_msg = explanation or "解説の生成に失敗しました。もう一度スタイル選択からお試しください。"
+            st.error(error_msg)
+            state_manager.add_message("system", f"エラー: {error_msg}")
+            # エラー時はスタイル選択に戻すなど
+            if st.button("スタイル選択に戻る"):
+                state_manager.set_current_step(state_manager.STEP_SELECT_STYLE)
+                st.session_state.current_explanation = None # 生成試行をリセット
+                st.rerun()
+    
+    # 解説が生成されたら、それは会話履歴に表示されるので、このステップでは特別な表示は不要
+    # フォローアップ入力のために、このステップはすぐにFOLLOW_UP_LOOPに遷移する
+
+elif current_step == state_manager.STEP_FOLLOW_UP_LOOP:
+    # st.header("6. 解説の確認と追加の質問") # ヘッダーは必要に応じて
+    # このステップでは、会話履歴の表示と、下のチャット入力がメイン
+    # 特定のメッセージを表示したい場合はここに記述
+    # 例: if not st.session_state.get("follow_up_prompted"):
+    #         st.info("解説について、ご不明な点やさらに知りたいことがあれば、下の入力欄からご質問ください。")
+    #         st.session_state.follow_up_prompted = True # 一度だけ表示するフラグ
+    pass
+
 # --- 会話履歴の表示 (変更なし) ---
 if st.session_state.messages:
-    st.subheader("会話履歴")
+    # st.subheader("会話履歴") # app.pyのメイン部分でst.titleを使っているので、サブヘッダーは不要かも
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+            st.markdown(message["content"]) # Markdownで表示
 
 # --- チャット入力 (ユーザーが応答や追加質問をするためのもの) ---
-if current_step in [state_manager.STEP_CLARIFICATION_NEEDED, state_manager.STEP_FOLLOW_UP_LOOP]:
-    user_response = st.chat_input("AIへの返答や追加の質問を入力してください...")
-    if user_response:
-        state_manager.add_message("user", user_response)
-        # state_manager.add_clarification_history_message("user", user_response) # 専用履歴
-
+if current_step in [
+    state_manager.STEP_CLARIFICATION_NEEDED,
+    state_manager.STEP_FOLLOW_UP_LOOP # FOLLOW_UP_LOOP を明示的に対象にする
+]:
+    if user_input := st.chat_input("AIへの返答や追加の質問を入力してください..."):
+        state_manager.add_message("user", user_input)
+        
         if current_step == state_manager.STEP_CLARIFICATION_NEEDED:
-            # ユーザーが明確化質問に応答したので、その応答を分析する
+            # ... (既存の明確化応答分析ロジック - 変更なし) ...
             state_manager.set_processing_status(True)
             with st.spinner("AIが応答を分析中です..."):
-                clarification_analysis_result = tutor_logic.analyze_user_clarification_logic(user_response)
+                clarification_analysis_result = tutor_logic.analyze_user_clarification_logic(user_input)
             state_manager.set_processing_status(False)
+            if clarification_analysis_result: # 以下略、既存コード
+                # ...
+                if "error" not in clarification_analysis_result and not st.session_state.is_request_ambiguous:
+                    state_manager.set_current_step(state_manager.STEP_SELECT_STYLE)
+                # ...
+            st.rerun()
 
-            if clarification_analysis_result:
-                if "error" in clarification_analysis_result:
-                    st.error(f"応答分析エラー: {clarification_analysis_result['error']}")
-                    state_manager.add_message("system", f"エラー: {clarification_analysis_result['error']}")
-                else:
-                    state_manager.store_clarification_analysis(clarification_analysis_result)
-                    if not st.session_state.is_request_ambiguous:
-                        success_msg = f"ありがとうございます、理解が深まりました！明確化されたご要望: 「{st.session_state.clarified_request_text}」"
-                        state_manager.add_message("assistant", success_msg)
-                        state_manager.set_current_step(state_manager.STEP_SELECT_STYLE)
-                    else:
-                        remaining_issue_msg = st.session_state.initial_analysis_result.get("reason_for_ambiguity", "もう少し情報が必要です。")
-                        state_manager.add_message("assistant", f"ありがとうございます。ただ、「{remaining_issue_msg}」という点がまだ気になります。")
-                st.rerun()
+        elif current_step == state_manager.STEP_FOLLOW_UP_LOOP:
+            # ユーザーが解説に対してフォローアップ質問をした
+            state_manager.set_processing_status(True)
+            with st.spinner("AIがフォローアップの応答を準備中です..."):
+                # tutor_logic のフォローアップ応答生成ロジックを呼び出す
+                followup_response = tutor_logic.generate_followup_response_logic(user_input)
+            state_manager.set_processing_status(False)
+            
+            if followup_response and "システムエラー" not in followup_response and "生成できませんでした" not in followup_response :
+                state_manager.add_message("assistant", followup_response)
             else:
-                st.error("応答分析処理中に予期せぬエラーが発生しました。")
-                state_manager.add_message("system", "エラー: 応答分析中に予期せぬエラー。")
-        # elif current_step == state_manager.STEP_FOLLOW_UP_LOOP:
-            # ...
+                error_msg = followup_response or "AIが応答を生成できませんでした。"
+                state_manager.add_message("system", f"エラー: {error_msg}")
+                st.error(error_msg) # エラーを画面にも表示
+            st.rerun() # 新しいメッセージを表示するために再描画
 
 # --- デバッグ情報 (変更なし) ---
 with st.sidebar:

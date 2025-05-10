@@ -11,6 +11,8 @@ from .state_manager import (
     reset_for_new_session,
     store_clarification_analysis,       # ステップ8で追加した関数
     add_clarification_history_message,  # ステップ8で追加した関数 (オプション)
+    store_generated_explanation,
+    store_generated_followup_response,
     # ステップ定数もエクスポートしておくと便利
     STEP_INPUT_SUBMISSION,
     STEP_INITIAL_ANALYSIS,
@@ -26,5 +28,6 @@ from .state_manager import (
 from .tutor_logic import (
     perform_initial_analysis_logic,
     generate_clarification_question_logic, # これが重要
-    analyze_user_clarification_logic
+    analyze_user_clarification_logic,
+    generate_explanation_logic
 )

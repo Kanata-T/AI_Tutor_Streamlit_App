@@ -266,3 +266,63 @@ def generate_explanation_llm(
          return "AIが解説を生成できませんでした。"
     
     return response_text.strip()
+
+
+def generate_followup_response_llm(
+        conversation_history: List[Dict[str, str]], # "role", "content" のリスト
+        user_latest_input: str
+    ) -> Optional[str]:
+    """
+    会話履歴とユーザーの最新の入力に基づき、フォローアップ応答をLLMに生成させる。
+    """
+    prompt_template = load_prompt_template("generate_followup")
+    if prompt_template is None:
+        print("Error: Generate followup prompt template could not be loaded.")
+        return "システムエラー: フォローアップ応答プロンプトを読み込めませんでした。"
+
+    # 会話履歴をテキスト形式に整形
+    history_text = ""
+    for message in conversation_history:
+        # Gemini APIは parts を直接渡せるので、ここではプロンプト用に整形
+        # 実際のAPIコールでは、message["role"]が "user" または "model" (Geminiの期待する形式) になっている必要がある
+        # ここではプロンプトテンプレートへの埋め込み用に簡易的に整形
+        role_display = "生徒" if message["role"] == "user" else "AI"
+        history_text += f"{role_display}: {message['content']}\n"
+    
+    # 最後のユーザー入力は別途渡すので、履歴からは除く（プロンプトテンプレートの構成による）
+    # もしプロンプトが履歴全体を期待し、最後の発言を別途強調するなら調整
+    if conversation_history and conversation_history[-1]["role"] == "user" and conversation_history[-1]["content"] == user_latest_input:
+         history_for_prompt = conversation_history[:-1] # 最後のユーザー発言は除く
+    else:
+         history_for_prompt = conversation_history
+
+    history_text_for_prompt = ""
+    for message in history_for_prompt:
+        role_display = "生徒" if message["role"] == "user" else "AI"
+        history_text_for_prompt += f"{role_display}: {message['content']}\n"
+
+
+    try:
+        prompt = prompt_template.format(
+            conversation_history=history_text_for_prompt.strip(), # 整形した会話履歴
+            user_latest_input=user_latest_input
+        )
+    except KeyError as e:
+        print(f"Error formatting followup prompt. Missing key: {e}")
+        return f"システムエラー: プロンプトのフォーマットに失敗しました (キー不足: {e})。"
+
+    # Gemini APIの `generate_content` は直接 `contents` (roleとpartsのリスト) を渡せる
+    # ここではプロンプトテンプレートを使うアプローチを採用しているが、
+    # 別の方法として、整形済みの会話履歴リストを直接 `model.generate_content(history_contents)` のように渡すことも可能。
+    # その場合、最後のユーザー入力もリストに含める。
+
+    response_text = call_gemini_api(
+        prompt,
+        model_name=TEXT_MODEL_NAME,
+        is_json_output=False # 通常のテキスト応答を期待
+    )
+
+    if response_text is None or isinstance(response_text, dict):
+         return "AIが応答を生成できませんでした。"
+    
+    return response_text.strip()
