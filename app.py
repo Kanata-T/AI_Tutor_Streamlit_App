@@ -279,11 +279,33 @@ elif current_step == state_manager.STEP_SUMMARIZE:
     # 次のセッションへの導線を表示する。
 
 elif current_step == state_manager.STEP_SESSION_END:
-    # st.header("セッション終了") # 会話履歴の最後に要約が表示されているはず
     st.success("学習セッションが終了しました。お疲れ様でした！")
-    if st.button("新しい質問を始める", key="new_session_button"):
-        state_manager.reset_for_new_session()
-        st.rerun()
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("新しい質問を始める", key="new_session_button_end", use_container_width=True):
+            state_manager.reset_for_new_session()
+            st.session_state.student_performance_analysis = None # 分析結果もクリア
+            st.rerun()
+    with col2:
+        if st.button("今回の学習の分析とCEFR推定を見る", key="analyze_performance_button", use_container_width=True):
+            # 分析結果がまだなければ実行
+            if st.session_state.get("student_performance_analysis") is None and not st.session_state.get("processing", False):
+                state_manager.set_processing_status(True)
+                with st.spinner("生徒の学習パフォーマンスを分析中です..."):
+                    analysis_report = tutor_logic.analyze_student_performance_logic()
+                state_manager.set_processing_status(False)
+                if analysis_report and "システムエラー" not in analysis_report and "生成できませんでした" not in analysis_report:
+                    st.session_state.student_performance_analysis = analysis_report
+                else:
+                    st.session_state.student_performance_analysis = analysis_report or "分析レポートの生成に失敗しました。"
+                st.rerun() # 分析結果を表示するために再描画
+    
+    # 分析結果があれば表示
+    if st.session_state.get("student_performance_analysis"):
+        st.markdown("---")
+        st.subheader("生徒の理解度分析とCEFRレベル推定")
+        st.markdown(st.session_state.student_performance_analysis)
 
 # --- 会話履歴の表示 (変更なし) ---
 if st.session_state.messages:

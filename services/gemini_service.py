@@ -410,3 +410,35 @@ def generate_summary_llm(
          return "AIが要約を生成できませんでした。"
     
     return response_text.strip()
+
+def analyze_student_performance_llm(
+        student_performance_data_str: str # 文字列化されたパフォーマンスデータ
+    ) -> Optional[str]: # Markdown形式のテキストを返す想定
+    """
+    生徒のパフォーマンスデータを分析し、理解度やCEFRレベルを推定する。
+    """
+    prompt_template = load_prompt_template("analyze_student_performance") # config経由
+    if prompt_template is None:
+        print("Error: Analyze student performance prompt template could not be loaded.")
+        return "システムエラー: 生徒能力分析プロンプトを読み込めませんでした。"
+
+    try:
+        prompt = prompt_template.format(
+            student_performance_data=student_performance_data_str
+        )
+    except KeyError as e:
+        print(f"Error formatting student performance analysis prompt. Missing key: {e}")
+        return f"システムエラー: プロンプトのフォーマットに失敗しました (キー不足: {e})。"
+
+    # この分析は長文になる可能性があるので、generation_configでmax_output_tokensを調整する必要があるかも
+    response_text = call_gemini_api(
+        prompt,
+        model_name=TEXT_MODEL_NAME, # テキストモデルで十分
+        is_json_output=False # Markdown形式のテキスト出力を期待
+        # generation_config={"max_output_tokens": 2048} # 必要に応じて設定
+    )
+
+    if response_text is None or isinstance(response_text, dict):
+         return "AIが生徒の能力分析を生成できませんでした。"
+    
+    return response_text.strip()

@@ -30,5 +30,6 @@ from .tutor_logic import (
     analyze_user_clarification_logic,
     generate_explanation_logic,
     generate_followup_response_logic,
-    generate_summary_logic
+    generate_summary_logic,
+    analyze_student_performance_logic
 )

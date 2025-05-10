@@ -15,6 +15,7 @@ prompt_templates:
   generate_explanation: "generate_explanation"
   generate_followup: "generate_followup"
   generate_summary: "generate_summary"
+  analyze_student_performance: "analyze_student_performance"
   # 必要に応じて他のプロンプトも追加
 
 # Directory Paths (プロジェクトルートからの相対パス)

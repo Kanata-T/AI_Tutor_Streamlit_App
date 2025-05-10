@@ -32,6 +32,7 @@ def initialize_session_state():
         "session_summary": None,
         "error_message": None,
         "processing": False, # LLM処理中などのフラグ
+        "student_performance_analysis": None,
     }
     for key, value in default_values.items():
         if key not in st.session_state:

@@ -7,5 +7,6 @@ from .gemini_service import (
     analyze_user_clarification_llm,
     generate_explanation_llm,
     generate_followup_response_llm,
-    generate_summary_llm
+    generate_summary_llm,
+    analyze_student_performance_llm
 )

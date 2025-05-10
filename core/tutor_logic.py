@@ -1,6 +1,6 @@
 # core/tutor_logic.py
 import streamlit as st # st.session_state にアクセスするために必要
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from services import gemini_service # services/__init__.py 経由でインポート
 from . import state_manager # 同じディレクトリの state_manager をインポート
 
@@ -227,3 +227,42 @@ def generate_summary_logic() -> Optional[str]:
     )
     print(f"Tutor Logic: Generated summary (first 100 chars): {summary_text[:100] if summary_text else 'None'}")
     return summary_text
+
+def format_conversation_for_analysis(conversation_history: List[Dict[str, str]]) -> str:
+    """会話履歴をパフォーマンス分析プロンプト用の文字列に整形する"""
+    performance_data_str = "セッション会話履歴:\n"
+    for message in conversation_history:
+        if message["role"] == "system" and "エラー" in message["content"]: # エラーログは含めない方が良いかも
+            continue
+        role_display = "生徒" if message["role"] == "user" else "AIチューター"
+        performance_data_str += f"- {role_display}: {message['content']}\n"
+    # 他にも初期分析結果(OCRテキスト、分類、曖昧さ判定)や、
+    # もしあれば生徒の答案の正誤などをここに含めると、よりリッチな分析が可能
+    # 例:
+    # if st.session_state.get("initial_analysis_result"):
+    #     performance_data_str += "\n初期分析結果:\n"
+    #     performance_data_str += json.dumps(st.session_state.initial_analysis_result, indent=2, ensure_ascii=False) + "\n"
+    return performance_data_str
+
+
+def analyze_student_performance_logic() -> Optional[str]:
+    """
+    現在のセッションの生徒のパフォーマンスを分析する。
+    """
+    # パフォーマンスデータとして、これまでの会話履歴全体を使用
+    full_conversation_history = st.session_state.get("messages", [])
+    
+    if not full_conversation_history:
+        print("Error in tutor_logic: Conversation history is empty for performance analysis.")
+        return "分析対象のパフォーマンスデータ（会話履歴）がありません。"
+
+    # 会話履歴を整形してプロンプトに渡す
+    performance_data_str = format_conversation_for_analysis(full_conversation_history)
+
+    print("Tutor Logic: Analyzing student performance.")
+    analysis_report = gemini_service.analyze_student_performance_llm(
+        student_performance_data_str=performance_data_str
+    )
+    # print(f"Tutor Logic: Generated student performance analysis report: {analysis_report}") # 全文表示は長いので注意
+    
+    return analysis_report
