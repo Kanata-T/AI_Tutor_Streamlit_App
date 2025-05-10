@@ -224,13 +224,63 @@ elif current_step == state_manager.STEP_GENERATE_EXPLANATION:
     # フォローアップ入力のために、このステップはすぐにFOLLOW_UP_LOOPに遷移する
 
 elif current_step == state_manager.STEP_FOLLOW_UP_LOOP:
-    # st.header("6. 解説の確認と追加の質問") # ヘッダーは必要に応じて
-    # このステップでは、会話履歴の表示と、下のチャット入力がメイン
-    # 特定のメッセージを表示したい場合はここに記述
-    # 例: if not st.session_state.get("follow_up_prompted"):
-    #         st.info("解説について、ご不明な点やさらに知りたいことがあれば、下の入力欄からご質問ください。")
-    #         st.session_state.follow_up_prompted = True # 一度だけ表示するフラグ
-    pass
+    # st.header("6. 解説の確認と追加の質問") # 必要に応じて
+    
+    # 「理解しました」ボタンをチャット入力欄の上に表示
+    # このボタンは、会話履歴が空でなく、かつAIの最後の発言があった後に表示するのが自然
+    if st.session_state.messages and st.session_state.messages[-1]["role"] == "assistant":
+        if st.button("✅ 理解しました / セッションを終了して要約へ", key="understood_button"):
+            state_manager.add_message("user", "（理解しました）") # ユーザーの意思表示を履歴に
+            state_manager.set_current_step(state_manager.STEP_CONFIRM_UNDERSTANDING) # 理解確認ステップへ
+            st.rerun()
+    # (ここに、さらに深掘りする質問を促すメッセージなどを表示しても良い)
+
+elif current_step == state_manager.STEP_CONFIRM_UNDERSTANDING:
+    st.header("7. 理解の確認")
+    # このステップでは、すぐに要約生成に進むか、
+    # LLMに「素晴らしいです！何か他にありますか？」のような最終確認をさせることもできる。
+    # 今回はシンプルに、すぐに要約ステップに進むことにする。
+    # (将来的には、ここで簡単なフィードバック収集UIを挟んでも良い)
+    
+    # state_manager.add_message("assistant", "理解されたとのこと、素晴らしいです！このセッションの内容を要約しますね。")
+    # st.session_state.messages に直接追加するのではなく、次のステップで生成させる
+    
+    # すぐに要約ステップへ
+    state_manager.set_current_step(state_manager.STEP_SUMMARIZE)
+    st.rerun() # 要約ステップの処理を起動
+
+elif current_step == state_manager.STEP_SUMMARIZE:
+    st.header("8. 要約と持ち帰りメッセージ")
+    if st.session_state.session_summary is None and not st.session_state.get("processing", False):
+        state_manager.set_processing_status(True)
+        with st.spinner("AIがセッションの要約を準備中です..."):
+            summary_text = tutor_logic.generate_summary_logic()
+        state_manager.set_processing_status(False)
+
+        if summary_text and "システムエラー" not in summary_text and "生成できませんでした" not in summary_text:
+            st.session_state.session_summary = summary_text
+            state_manager.add_message("assistant", f"【今回の学習のまとめ】\n\n{summary_text}")
+            state_manager.set_current_step(state_manager.STEP_SESSION_END)
+            st.rerun()
+        else:
+            error_msg = summary_text or "要約の生成に失敗しました。"
+            st.error(error_msg)
+            state_manager.add_message("system", f"エラー: {error_msg}")
+            # エラー時はフォローアップに戻るか、終了ボタンだけ表示など
+            if st.button("フォローアップに戻る"):
+                state_manager.set_current_step(state_manager.STEP_FOLLOW_UP_LOOP)
+                st.session_state.session_summary = None # 生成試行をリセット
+                st.rerun()
+    
+    # 要約は会話履歴に表示されるので、ここでは特別な表示はしない。
+    # 次のセッションへの導線を表示する。
+
+elif current_step == state_manager.STEP_SESSION_END:
+    # st.header("セッション終了") # 会話履歴の最後に要約が表示されているはず
+    st.success("学習セッションが終了しました。お疲れ様でした！")
+    if st.button("新しい質問を始める", key="new_session_button"):
+        state_manager.reset_for_new_session()
+        st.rerun()
 
 # --- 会話履歴の表示 (変更なし) ---
 if st.session_state.messages:
@@ -239,12 +289,19 @@ if st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"]) # Markdownで表示
 
-# --- チャット入力 (ユーザーが応答や追加質問をするためのもの) ---
+# --- チャット入力 (表示条件を調整) ---
+# STEP_FOLLOW_UP_LOOP のみでアクティブにするか、他の状態も考慮するか
+# 要約表示後は入力不可にするなど
 if current_step in [
     state_manager.STEP_CLARIFICATION_NEEDED,
-    state_manager.STEP_FOLLOW_UP_LOOP # FOLLOW_UP_LOOP を明示的に対象にする
+    state_manager.STEP_FOLLOW_UP_LOOP
+    # 他のステップでは非表示にするか、disabledにする
 ]:
-    if user_input := st.chat_input("AIへの返答や追加の質問を入力してください..."):
+    if user_input := st.chat_input(
+        "AIへの返答や追加の質問を入力してください...",
+        disabled=(st.session_state.get("processing", False) or current_step not in [state_manager.STEP_CLARIFICATION_NEEDED, state_manager.STEP_FOLLOW_UP_LOOP])
+        # 処理中や対象ステップ以外では入力を無効化
+    ):
         state_manager.add_message("user", user_input)
         
         if current_step == state_manager.STEP_CLARIFICATION_NEEDED:

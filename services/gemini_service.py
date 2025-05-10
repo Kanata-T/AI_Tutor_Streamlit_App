@@ -326,3 +326,42 @@ def generate_followup_response_llm(
          return "AIが応答を生成できませんでした。"
     
     return response_text.strip()
+
+
+def generate_summary_llm(
+        conversation_history: List[Dict[str, str]]
+    ) -> Optional[str]:
+    """
+    会話履歴に基づき、セッションの要約と持ち帰りメッセージをLLMに生成させる。
+    """
+    prompt_template = load_prompt_template("generate_summary")
+    if prompt_template is None:
+        print("Error: Generate summary prompt template could not be loaded.")
+        return "システムエラー: 要約生成プロンプトを読み込めませんでした。"
+
+    history_text = ""
+    for message in conversation_history:
+        # システムメッセージは要約に含めない方が良い場合がある
+        if message["role"] != "system":
+            role_display = "生徒" if message["role"] == "user" else "AI"
+            history_text += f"{role_display}: {message['content']}\n"
+    
+    # トークン数制限を考慮し、履歴が長すぎる場合は末尾N件などに絞る処理が必要な場合も
+    # (今回は簡易的に全量渡す)
+
+    try:
+        prompt = prompt_template.format(conversation_history=history_text.strip())
+    except KeyError as e:
+        print(f"Error formatting summary prompt. Missing key: {e}")
+        return f"システムエラー: プロンプトのフォーマットに失敗しました (キー不足: {e})。"
+
+    response_text = call_gemini_api(
+        prompt,
+        model_name=TEXT_MODEL_NAME,
+        is_json_output=False
+    )
+
+    if response_text is None or isinstance(response_text, dict):
+         return "AIが要約を生成できませんでした。"
+    
+    return response_text.strip()

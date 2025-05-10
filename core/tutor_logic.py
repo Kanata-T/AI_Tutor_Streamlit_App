@@ -180,3 +180,20 @@ def generate_followup_response_logic(user_latest_input: str) -> Optional[str]:
     print(f"Tutor Logic: Generated followup response (first 100 chars): {followup_response[:100] if followup_response else 'None'}")
     
     return followup_response
+
+def generate_summary_logic() -> Optional[str]:
+    """
+    現在の会話履歴全体を基に、セッションの要約をLLMに生成させる。
+    """
+    full_conversation_history = st.session_state.get("messages", [])
+    if not full_conversation_history:
+        print("Error in tutor_logic: Conversation history is empty for summary.")
+        return "要約するための会話履歴がありません。"
+
+    print("Tutor Logic: Generating session summary.")
+    summary_text = gemini_service.generate_summary_llm(
+        conversation_history=full_conversation_history
+    )
+    print(f"Tutor Logic: Generated summary (first 100 chars): {summary_text[:100] if summary_text else 'None'}")
+    
+    return summary_text

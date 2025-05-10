@@ -29,5 +29,7 @@ from .tutor_logic import (
     perform_initial_analysis_logic,
     generate_clarification_question_logic, # これが重要
     analyze_user_clarification_logic,
-    generate_explanation_logic
+    generate_explanation_logic,
+    generate_followup_response_logic,
+    generate_summary_logic
 )

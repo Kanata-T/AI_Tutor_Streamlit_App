@@ -115,3 +115,9 @@ def add_clarification_history_message(role: str, content: str):
 def set_explanation_style(style: str):
     """選択された解説スタイルを保存する"""
     st.session_state.selected_explanation_style = style
+
+def store_generated_explanation(explanation: str):
+    """生成された解説を保存する"""
+    st.session_state.current_explanation = explanation
+    # 解説が生成されたら、それをアシスタントのメッセージとして会話履歴にも追加
+    add_message("assistant", explanation)
