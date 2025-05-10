@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# UV virtual environment
+.venv/
+*.venv
+
+# IDE / OS specific
+.vscode/
+.idea/
+*.DS_Store
+Thumbs.db
+
+# Secrets
+.env
+*.env.*
+!*.env.example
+
+# Streamlit
+.streamlit/
+
+# Project metadata
+pyproject.toml
+poetry.lock
+requirements.txt
+requirements-dev.txt
