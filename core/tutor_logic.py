@@ -108,17 +108,25 @@ def generate_clarification_question_logic() -> Optional[str]:
     initial_analysis = st.session_state.get("initial_analysis_result", {})
     reason_ambiguity = initial_analysis.get("reason_for_ambiguity", "詳細不明")
     image_provided = st.session_state.get("uploaded_file_data") is not None
+    
+    # 明確化質問生成のコンテキストとして渡す会話履歴
+    # (ユーザーの最初の質問と、AIの初期応答(曖昧さ指摘)までが含まれている想定)
+    current_messages = st.session_state.get("messages", [])
 
-    if not original_query or not reason_ambiguity: # reason_ambiguityが空でも質問は作れるかもしれないので、original_queryだけでも良いかも
-        print("Error in tutor_logic: Missing original query or ambiguity reason for clarification.")
-        # ユーザーに表示するエラーメッセージは呼び出し元(app.py)で制御した方が良い場合もある
-        return "明確化のための情報を取得できませんでした。" 
+
+    if not original_query: # 曖昧さの理由がなくても、元のクエリがあれば質問は作れる
+        print("Error in tutor_logic: Missing original query for clarification.")
+        return "明確化のための元の質問情報がありません。"
+    if not reason_ambiguity and current_messages: # 理由が不明でも履歴があれば試みる
+        reason_ambiguity = "（具体的な曖昧理由は不明ですが、追加情報が必要です）"
+
 
     print(f"Tutor Logic: Generating clarification question. Reason: {reason_ambiguity}")
     clarification_q = gemini_service.generate_clarification_question_llm(
         original_query_text=original_query,
-        reason_for_ambiguity=reason_ambiguity,
-        image_provided=image_provided
+        reason_for_ambiguity=reason_ambiguity, # 必須
+        image_provided=image_provided,
+        conversation_history=current_messages # ★ 会話履歴を渡す ★
     )
     print(f"Tutor Logic: Generated clarification question: {clarification_q}")
     

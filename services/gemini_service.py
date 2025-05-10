@@ -204,32 +204,56 @@ def analyze_user_clarification_llm(
 def generate_clarification_question_llm(
         original_query_text: str,
         reason_for_ambiguity: str,
-        image_provided: bool
+        image_provided: bool,
+        conversation_history: List[Dict[str, str]] # 会話履歴を引数に追加
     ) -> Optional[str]:
     """
     曖昧なユーザーの質問に対して、明確化のための質問をLLMに生成させる。
     """
-    prompt_template = load_prompt_template("clarification_question")  # ★ キーで指定 ★
+    prompt_template = load_prompt_template("clarification_question") # config経由でファイル名取得
     if prompt_template is None:
+        print("Error: Clarification question prompt template could not be loaded.")
         return "システムエラー: 明確化質問プロンプトを読み込めませんでした。"
-    original_image_info_text = "(画像も提供されています)" if image_provided else ""
+
+    original_image_info_text = "(画像も提供されています)" if image_provided else "(画像はありませんでした)" # プロンプトに合わせて調整
+
+    # 会話履歴をテキスト形式に整形
+    history_text_for_prompt = ""
+    # このプロンプトのコンテキストでは、直近のユーザーの質問とAIの初期応答が重要
+    # 全履歴を渡すか、関連部分を抽出するかはプロンプトの設計とトークン数による
+    # 今回は、ユーザーの最初の質問とAIの初期応答（曖昧さ指摘）が含まれる履歴を想定
+    # 簡易的に、渡されたconversation_historyをそのまま使う
+    for message in conversation_history:
+        role_display = "生徒" if message["role"] == "user" else "AI"
+        if message["role"] == "system": # システムメッセージは含めない
+            continue
+        history_text_for_prompt += f"{role_display}: {message['content']}\n"
+    if not history_text_for_prompt: # 履歴が空なら (通常はユーザーの最初の質問があるはず)
+        history_text_for_prompt = "（まだ会話はありません）"
+
+
     try:
         prompt = prompt_template.format(
             original_user_query=original_query_text,
             original_image_info=original_image_info_text,
-            reason_for_ambiguity=reason_for_ambiguity
+            reason_for_ambiguity=reason_for_ambiguity,
+            conversation_history=history_text_for_prompt.strip() # 整形した会話履歴
         )
     except KeyError as e:
+        print(f"Error formatting clarification prompt. Missing key: {e}")
         return f"システムエラー: プロンプトのフォーマットに失敗しました (キー不足: {e})。"
 
     response_text = call_gemini_api(
         prompt,
-        model_name=TEXT_MODEL_NAME,  # 明示的に指定
+        model_name=TEXT_MODEL_NAME,
         is_json_output=False
     )
+
     if response_text is None or isinstance(response_text, dict):
          return "AIが明確化のための質問を生成できませんでした。もう一度試しますか？"
+    
     return response_text.strip()
+
 
 def generate_explanation_llm(
         clarified_request: str,
