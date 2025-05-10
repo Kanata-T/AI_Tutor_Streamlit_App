@@ -200,17 +200,30 @@ def generate_followup_response_logic(user_latest_input: str) -> Optional[str]:
 
 def generate_summary_logic() -> Optional[str]:
     """
-    現在の会話履歴全体を基に、セッションの要約をLLMに生成させる。
+    現在の会話履歴全体とセッション情報を基に、セッションの要約をLLMに生成させる。
     """
     full_conversation_history = st.session_state.get("messages", [])
+    
+    request_category = "不明なカテゴリ"
+    topic = "不明なトピック"
+    if st.session_state.get("initial_analysis_result"):
+        request_category = st.session_state.initial_analysis_result.get("request_category", request_category)
+        topic = st.session_state.initial_analysis_result.get("topic", topic)
+    
+    # もしclarified_request_textがあれば、それをtopicとして優先するなども考えられる
+    if st.session_state.get("clarified_request_text"):
+        topic = st.session_state.clarified_request_text # こちらの方がより具体的な場合がある
+
+
     if not full_conversation_history:
         print("Error in tutor_logic: Conversation history is empty for summary.")
         return "要約するための会話履歴がありません。"
 
-    print("Tutor Logic: Generating session summary.")
+    print(f"Tutor Logic: Generating session summary. Category: {request_category}, Topic: {topic[:50]}...")
     summary_text = gemini_service.generate_summary_llm(
+        request_category=request_category,
+        topic=topic,
         conversation_history=full_conversation_history
     )
     print(f"Tutor Logic: Generated summary (first 100 chars): {summary_text[:100] if summary_text else 'None'}")
-    
     return summary_text

@@ -368,30 +368,45 @@ def generate_followup_response_llm(
     return response_text.strip()
 
 def generate_summary_llm(
+        request_category: str, # 追加
+        topic: str,            # 追加
         conversation_history: List[Dict[str, str]]
     ) -> Optional[str]:
     """
     会話履歴に基づき、セッションの要約と持ち帰りメッセージをLLMに生成させる。
     """
-    prompt_template = load_prompt_template("generate_summary")  # ★ キーで指定 ★
+    prompt_template = load_prompt_template("generate_summary") # config経由
     if prompt_template is None:
+        print("Error: Generate summary prompt template could not be loaded.")
         return "システムエラー: 要約生成プロンプトを読み込めませんでした。"
 
-    history_text = ""
+    # 会話履歴をテキスト形式に整形 (プロンプトの{relevant_history_summary}用)
+    history_text_for_prompt = ""
     for message in conversation_history:
-        if message["role"] != "system":
-            role_display = "生徒" if message["role"] == "user" else "AI"
-            history_text += f"{role_display}: {message['content']}\n"
+        if message["role"] == "system": continue # システムメッセージは除外
+        role_display = "生徒" if message["role"] == "user" else "AI"
+        history_text_for_prompt += f"{role_display}: {message['content']}\n"
+    
+    if not history_text_for_prompt: # 通常ありえないが念のため
+        history_text_for_prompt = "（要約対象の会話履歴がありません）"
+
     try:
-        prompt = prompt_template.format(conversation_history=history_text.strip())
+        prompt = prompt_template.format(
+            request_category=request_category,
+            topic=topic,
+            relevant_history_summary=history_text_for_prompt.strip()
+        )
     except KeyError as e:
+        print(f"Error formatting summary prompt. Missing key: {e}")
         return f"システムエラー: プロンプトのフォーマットに失敗しました (キー不足: {e})。"
 
     response_text = call_gemini_api(
         prompt,
-        model_name=TEXT_MODEL_NAME,  # 明示的に指定
+        model_name=TEXT_MODEL_NAME,
         is_json_output=False
     )
+
     if response_text is None or isinstance(response_text, dict):
          return "AIが要約を生成できませんでした。"
+    
     return response_text.strip()
