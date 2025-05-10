@@ -182,20 +182,20 @@ def generate_followup_response_logic(user_latest_input: str) -> Optional[str]:
     """
     ユーザーのフォローアップ入力に基づき、LLMに適切な応答を生成させる。
     """
-    # ユーザーの最新入力は引数で受け取るが、それを含む全会話履歴を渡す
     full_conversation_history = st.session_state.get("messages", [])
     
-    if not full_conversation_history: # 履歴がないことは通常ありえないが念のため
+    if not full_conversation_history:
         print("Error in tutor_logic: Conversation history is empty for followup.")
         return "会話の文脈がありません。"
 
+    # ユーザーの最新入力は full_conversation_history の最後にも含まれているはず
+    # なので、user_latest_input はそのまま渡す
     print(f"Tutor Logic: Generating followup response. User input: '{user_latest_input[:50]}...'")
     followup_response = gemini_service.generate_followup_response_llm(
-        conversation_history=full_conversation_history, # 全履歴を渡す
-        user_latest_input=user_latest_input # 最新の入力も渡す (プロンプト内で利用)
+        conversation_history=full_conversation_history, # ユーザーの最新入力を含む全履歴
+        user_latest_input=user_latest_input # プロンプト用に別途渡す
     )
     print(f"Tutor Logic: Generated followup response (first 100 chars): {followup_response[:100] if followup_response else 'None'}")
-    
     return followup_response
 
 def generate_summary_logic() -> Optional[str]:

@@ -325,43 +325,46 @@ def generate_explanation_llm(
 
 
 def generate_followup_response_llm(
-        conversation_history: List[Dict[str, str]],
-        user_latest_input: str
+        conversation_history: List[Dict[str, str]], # この履歴の最後がユーザーのフォローアップ入力
+        user_latest_input: str # プロンプトテンプレートの都合上、最新の入力を別途渡す
     ) -> Optional[str]:
     """
     会話履歴とユーザーの最新の入力に基づき、フォローアップ応答をLLMに生成させる。
     """
-    prompt_template = load_prompt_template("generate_followup")  # ★ キーで指定 ★
+    prompt_template = load_prompt_template("generate_followup") # config経由
     if prompt_template is None:
+        print("Error: Generate followup prompt template could not be loaded.")
         return "システムエラー: フォローアップ応答プロンプトを読み込めませんでした。"
 
-    history_text = ""
-    for message in conversation_history:
-        role_display = "生徒" if message["role"] == "user" else "AI"
-        history_text += f"{role_display}: {message['content']}\n"
-    if conversation_history and conversation_history[-1]["role"] == "user" and conversation_history[-1]["content"] == user_latest_input:
-         history_for_prompt = conversation_history[:-1]
-    else:
-         history_for_prompt = conversation_history
+    # 会話履歴をテキスト形式に整形
+    # プロンプトのContext指示に合わせて、conversation_historyにはユーザーの最新発言も含まれている想定
     history_text_for_prompt = ""
-    for message in history_for_prompt:
+    for message in conversation_history:
+        if message["role"] == "system": continue
         role_display = "生徒" if message["role"] == "user" else "AI"
         history_text_for_prompt += f"{role_display}: {message['content']}\n"
+    
+    if not history_text_for_prompt: # 通常ありえない
+        history_text_for_prompt = "（会話履歴なし）"
+
     try:
         prompt = prompt_template.format(
             conversation_history=history_text_for_prompt.strip(),
-            user_latest_input=user_latest_input
+            user_followup_text=user_latest_input # プロンプトのプレースホルダに合わせる
         )
     except KeyError as e:
+        print(f"Error formatting followup prompt. Missing key: {e}")
         return f"システムエラー: プロンプトのフォーマットに失敗しました (キー不足: {e})。"
 
     response_text = call_gemini_api(
         prompt,
-        model_name=TEXT_MODEL_NAME,  # 明示的に指定
+        model_name=TEXT_MODEL_NAME,
         is_json_output=False
     )
+
     if response_text is None or isinstance(response_text, dict):
          return "AIが応答を生成できませんでした。"
+    
     return response_text.strip()
 
 def generate_summary_llm(
