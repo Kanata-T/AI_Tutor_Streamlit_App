@@ -7,37 +7,53 @@ from . import state_manager # 同じディレクトリの state_manager をイ�
 def perform_initial_analysis_logic() -> Optional[Dict[str, Any]]:
     """
     ユーザーの入力に基づいて初期分析を実行し、結果を返す。
-    st.session_state から必要な情報を取得し、gemini_service を呼び出す。
+    1. 画像があればOCRを実行。
+    2. OCR結果とテキストクエリで分析を実行。
     """
     query_text = st.session_state.get("user_query_text", "")
-    image_data = st.session_state.get("uploaded_file_data", None) # mime_type, data を含む辞書
-    # selected_topic = st.session_state.get("selected_topic", "") # LLMに渡す情報として含めても良い
+    image_data_dict = st.session_state.get("uploaded_file_data", None) # st.session_stateのキー名を確認
 
-    if not query_text and not image_data:
-        # st.error("分析するテキストまたは画像がありません。") # UI側で表示するのでここでは不要かも
+    if not query_text and not image_data_dict:
         print("Error in tutor_logic: No query text or image data for analysis.")
         return {"error": "入力がありません。"}
 
+    extracted_ocr_text: Optional[str] = None
+    if image_data_dict:
+        print(f"Tutor Logic: Performing OCR. Image MIME: {image_data_dict.get('mime_type')}")
+        # state_manager.set_processing_status(True) # 必要なら個別のスピナー制御
+        # with st.spinner("画像を解析中 (OCR)..."): # app.py側で全体スピナーを出すのでここでは不要かも
+        extracted_ocr_text = gemini_service.extract_text_from_image_llm(image_data_dict)
+        # state_manager.set_processing_status(False)
+        if extracted_ocr_text is None:
+            print("Warning in tutor_logic: OCR failed or returned no text.")
+            # OCR失敗をエラーとして扱うか、テキストなしとして分析に進むか選択
+            # extracted_ocr_text = "" # 空文字として進む
+            return {"error": "画像の文字抽出に失敗しました。"} # 今回はエラーとして一旦止める
 
-    # gemini_service の analyze_initial_input を呼び出す
-    # この関数はJSONレスポンス(辞書)またはエラー情報(辞書)またはNoneを返す想定
-    print(f"Tutor Logic: Calling Gemini for initial analysis. Query: '{query_text[:50]}...', Image: {'Yes' if image_data else 'No'}")
-    analysis_result = gemini_service.analyze_initial_input(
+        print(f"Tutor Logic: OCR Result: '{extracted_ocr_text[:100]}...'")
+        # (オプション) OCR結果をst.session_stateに保存してもよい
+        # st.session_state.ocr_result_text = extracted_ocr_text
+    
+    # OCR結果（あれば）とテキストクエリで分析
+    print(f"Tutor Logic: Calling analysis with OCR. Query: '{query_text[:50]}...', OCR: '{str(extracted_ocr_text)[:50] if extracted_ocr_text else 'No OCR'}'")
+    analysis_result = gemini_service.analyze_initial_input_with_ocr(
         query_text=query_text,
-        image_data=image_data
+        ocr_text_from_image=extracted_ocr_text
     )
-    print(f"Tutor Logic: Received analysis result: {analysis_result}")
-
+    print(f"Tutor Logic: Received final analysis result: {analysis_result}")
 
     if analysis_result is None:
-        # API呼び出し自体が失敗した場合など
-        return {"error": "AIによる分析に失敗しました。時間をおいて再度お試しください。"}
-    
+        return {"error": "AIによる分析に失敗しました。"}
     if "error" in analysis_result:
-        # APIは成功したが、レスポンスのパースエラーなど、サービス層でエラーがセットされた場合
-        return analysis_result # エラー情報をそのまま返す
+        return analysis_result
+    
+    # 成功した場合、元のinitial_analysis_resultにOCR結果も追加して返す（もし必要なら）
+    # 今回のanalyze_query_with_ocrプロンプトではOCR結果は出力JSONに含まれない想定
+    # 必要であれば、ここでanalysis_resultに "ocr_text": extracted_ocr_text を追加する
+    if extracted_ocr_text and "ocr_text" not in analysis_result: # 出力に含まれないが保持したい場合
+         analysis_result["ocr_text_from_extraction"] = extracted_ocr_text
 
-    # 成功した場合、結果を返す (この辞書が state_manager.store_initial_analysis_result に渡される)
+
     return analysis_result
 
 

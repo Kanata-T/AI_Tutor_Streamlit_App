@@ -1,0 +1,27 @@
+# LLM Model Settings
+llm_models:
+  text_model_name: "gemini-2.5-pro-preview-05-06"
+  vision_model_name: "gemini-2.5-flash-preview-04-17"
+  # temperature: 0.7 # 例: 生成時の温度設定
+  # top_p: 1.0       # 例: Top-pサンプリング
+
+# Prompt File Names (promptsディレクトリ内のファイル名、拡張子なし)
+prompt_templates:
+  system_prompt: "system_prompt"
+  extract_text_from_image: "extract_text_from_image" # OCR用に追加
+  analyze_query_with_ocr: "analyze_query_with_ocr"   # 新しい初期分析用 (旧 initial_analysis)
+  clarification_question: "clarification_question"
+  analyze_clarification_response: "analyze_clarification_response"
+  generate_explanation: "generate_explanation"
+  generate_followup: "generate_followup"
+  generate_summary: "generate_summary"
+  # 必要に応じて他のプロンプトも追加
+
+# Directory Paths (プロジェクトルートからの相対パス)
+# PROMPTS_DIR は pathlib で動的に計算するので、ここでは不要かもしれないが、
+# 他の固定パスが必要な場合に備えてセクションだけ用意
+# directories:
+#   prompts: "prompts"
+
+# Other Magic Numbers or Settings
+# example_setting: 123

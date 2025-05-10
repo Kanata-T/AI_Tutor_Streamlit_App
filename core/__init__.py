@@ -12,7 +12,6 @@ from .state_manager import (
     store_clarification_analysis,       # ステップ8で追加した関数
     add_clarification_history_message,  # ステップ8で追加した関数 (オプション)
     store_generated_explanation,
-    store_generated_followup_response,
     # ステップ定数もエクスポートしておくと便利
     STEP_INPUT_SUBMISSION,
     STEP_INITIAL_ANALYSIS,

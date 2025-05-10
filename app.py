@@ -123,6 +123,9 @@ elif current_step == state_manager.STEP_INITIAL_ANALYSIS:
     if st.session_state.initial_analysis_result and "error" not in st.session_state.initial_analysis_result:
         st.subheader("初期分析結果:")
         st.json(st.session_state.initial_analysis_result)
+        # OCR抽出テキストが存在する場合は個別に表示
+        if "ocr_text_from_extraction" in st.session_state.initial_analysis_result:
+            st.write("抽出されたOCRテキスト:", st.session_state.initial_analysis_result["ocr_text_from_extraction"])
     elif st.session_state.initial_analysis_result and "error" in st.session_state.initial_analysis_result:
         st.warning("分析結果にエラーが含まれています。上記のエラーメッセージを確認してください。")
     
