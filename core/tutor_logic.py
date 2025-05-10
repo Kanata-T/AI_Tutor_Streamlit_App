@@ -63,37 +63,39 @@ def analyze_user_clarification_logic(user_response: str) -> Optional[Dict[str, A
     st.session_state から必要な情報を取得する。
     """
     original_query = st.session_state.get("user_query_text", "")
-    initial_analysis = st.session_state.get("initial_analysis_result", {})
-    reason_ambiguity = initial_analysis.get("reason_for_ambiguity", "詳細不明")
+    initial_analysis = st.session_state.get("initial_analysis_result", {}) # これが必要
+    reason_ambiguity_initial = initial_analysis.get("reason_for_ambiguity", "詳細不明") # 初期分析時の理由
     image_provided = st.session_state.get("uploaded_file_data") is not None
     
-    # AIからの直近の明確化質問を取得 (messagesの最後がassistantであると仮定)
-    # より堅牢にするには、clarification_history を使うか、メッセージにタイプを付与する
-    llm_question = "不明な質問" # デフォルト
-    if st.session_state.messages:
-        for msg in reversed(st.session_state.messages):
-            if msg["role"] == "assistant": # 最後のAIの発言を明確化質問とする
-                llm_question = msg["content"]
-                break
-    
-    # あるいは、明確化ループ専用の履歴 `clarification_history` があればそこから取得
-    # if st.session_state.get("clarification_history"):
-    #    last_clarif_q_entry = next((item for item in reversed(st.session_state.clarification_history) if item["role"] == "assistant"), None) # もしclarification_historyを使うなら
-    #    if last_clarif_q_entry:
-    #        llm_question = last_clarif_q_entry["content"]
+    # AIからの直近の明確化質問を取得
+    llm_question = "不明な質問"
+    current_messages = st.session_state.get("messages", []) # 全会話履歴
+    if current_messages:
+        # ユーザーの応答(user_response)の直前のAIの発言が明確化質問であると仮定
+        # ユーザーの応答はmessagesの最後に追加されているはずなので、その一つ前を見る
+        if len(current_messages) >= 2 and current_messages[-2]["role"] == "assistant":
+             llm_question = current_messages[-2]["content"]
+        elif current_messages[-1]["role"] == "assistant": # ユーザー入力直前にAI発言がなかった場合(ありえないはずだが念のため)
+             llm_question = current_messages[-1]["content"]
 
 
-    if not all([original_query, reason_ambiguity, llm_question, user_response]):
-        print("Error in tutor_logic: Missing data for analyzing user clarification.")
-        return {"error": "ユーザー応答の分析に必要な情報が不足しています。"}
+    if not all([original_query, reason_ambiguity_initial, llm_question != "不明な質問", user_response]):
+        missing_parts = []
+        if not original_query: missing_parts.append("元の質問")
+        if not reason_ambiguity_initial: missing_parts.append("初期の曖昧さの理由")
+        if llm_question == "不明な質問": missing_parts.append("AIの明確化質問")
+        if not user_response: missing_parts.append("ユーザーの応答")
+        print(f"Error in tutor_logic: Missing data for analyzing user clarification. Missing: {', '.join(missing_parts)}")
+        return {"error": f"ユーザー応答の分析に必要な情報が不足しています ({', '.join(missing_parts)})。"}
 
     print(f"Tutor Logic: Analyzing user clarification. User response: '{user_response[:50]}...'")
     analysis_result = gemini_service.analyze_user_clarification_llm(
         original_query_text=original_query,
         original_image_provided=image_provided,
-        reason_for_ambiguity=reason_ambiguity,
+        reason_for_ambiguity=reason_ambiguity_initial, # 初期分析時の曖昧さの理由
         llm_clarification_question=llm_question,
-        user_response_text=user_response
+        user_response_text=user_response,
+        conversation_history=current_messages # 全会話履歴を渡す
     )
     print(f"Tutor Logic: Received clarification analysis result: {analysis_result}")
     

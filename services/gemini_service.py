@@ -171,32 +171,48 @@ def analyze_initial_input_with_ocr( # 関数名を変更 (旧 analyze_initial_in
 def analyze_user_clarification_llm(
         original_query_text: str,
         original_image_provided: bool,
-        reason_for_ambiguity: str,
-        llm_clarification_question: str,
-        user_response_text: str
+        reason_for_ambiguity: str,         # 初期分析での曖昧さの理由
+        llm_clarification_question: str,   # AIがした明確化質問
+        user_response_text: str,           # それに対するユーザーの応答
+        conversation_history: List[Dict[str, str]] # これまでの全会話履歴
     ) -> Optional[Dict[str, Any]]:
     """
     ユーザーの明確化応答を分析し、曖昧さが解消されたか判定する。
     """
-    prompt_template = load_prompt_template("analyze_clarification_response")  # ★ キーで指定 ★
+    prompt_template = load_prompt_template("analyze_clarification_response") # config経由
     if prompt_template is None:
+        print("Error: Analyze clarification response prompt template could not be loaded.")
         return {"error": "システムエラー: 応答分析プロンプトを読み込めませんでした。"}
 
     original_image_info_text = "(画像も提供されていました)" if original_image_provided else "(画像はありませんでした)"
+
+    # 会話履歴をテキスト形式に整形 (プロンプトの{conversation_history}用)
+    # この履歴には、AIの明確化質問とユーザーの最新応答も含まれているべき
+    history_text_for_prompt = ""
+    for message in conversation_history:
+        role_display = "生徒" if message["role"] == "user" else "AI"
+        if message["role"] == "system": continue
+        history_text_for_prompt += f"{role_display}: {message['content']}\n"
+    if not history_text_for_prompt:
+        history_text_for_prompt = "（会話履歴なし）"
+
+
     try:
         prompt = prompt_template.format(
             original_user_query=original_query_text,
             original_image_info=original_image_info_text,
             reason_for_ambiguity=reason_for_ambiguity,
             llm_clarification_question=llm_clarification_question,
-            user_response_text=user_response_text
+            user_response_text=user_response_text,
+            conversation_history=history_text_for_prompt.strip()
         )
     except KeyError as e:
+        print(f"Error formatting analyze clarification response prompt. Missing key: {e}")
         return {"error": f"システムエラー: プロンプトのフォーマットに失敗しました (キー不足: {e})。"}
 
     result = call_gemini_api(
         prompt,
-        model_name=TEXT_MODEL_NAME,  # 明示的に指定
+        model_name=TEXT_MODEL_NAME,
         is_json_output=True
     )
     return result

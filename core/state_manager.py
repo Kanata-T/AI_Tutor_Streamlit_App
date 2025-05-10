@@ -95,15 +95,20 @@ def store_clarification_analysis(analysis_data: Dict[str, Any]):
     if "resolved" in analysis_data and analysis_data["resolved"]:
         st.session_state.is_request_ambiguous = False
         st.session_state.clarified_request_text = analysis_data.get("clarified_request", "不明（明確化成功）")
-        # clarification_history にも最終的な明確化リクエストを記録しても良い
+        # もしinitial_analysis_resultのreason_for_ambiguityをクリアしたいならここで
+        if isinstance(st.session_state.initial_analysis_result, dict):
+            st.session_state.initial_analysis_result["reason_for_ambiguity"] = None 
     else: # resolved が false またはキーが存在しない場合
-        st.session_state.is_request_ambiguous = True # 依然として曖昧
-        # reason_for_ambiguity を更新しても良いかもしれない (remaining_issue を基に)
+        st.session_state.is_request_ambiguous = True
         if "remaining_issue" in analysis_data and analysis_data["remaining_issue"]:
-             # initial_analysis_result が辞書であることを保証
+            if not isinstance(st.session_state.initial_analysis_result, dict):
+                st.session_state.initial_analysis_result = {} # 初期化（通常は既に辞書のはず）
+            # 新しい曖昧さの理由としてremaining_issueを保存
+            st.session_state.initial_analysis_result["reason_for_ambiguity"] = analysis_data["remaining_issue"]
+        else: # remaining_issueがない場合は、一般的なメッセージにフォールバック
             if not isinstance(st.session_state.initial_analysis_result, dict):
                 st.session_state.initial_analysis_result = {}
-            st.session_state.initial_analysis_result["reason_for_ambiguity"] = analysis_data["remaining_issue"]
+            st.session_state.initial_analysis_result["reason_for_ambiguity"] = "まだ不明瞭な点があります。もう少し詳しく教えてください。"
 
 def add_clarification_history_message(role: str, content: str):
     """明確化ループ専用の会話履歴にメッセージを追加する (オプション)"""
