@@ -1,6 +1,7 @@
+# config.yaml
 # LLM Model Settings
 llm_models:
-  text_model_name: "gemini-2.5-pro-preview-05-06"
+  text_model_name: "gemini-2.5-pro-exp-03-25"
   vision_model_name: "gemini-2.5-flash-preview-04-17"
   # temperature: 0.7 # 例: 生成時の温度設定
   # top_p: 1.0       # 例: Top-pサンプリング
@@ -26,3 +27,30 @@ prompt_templates:
 
 # Other Magic Numbers or Settings
 # example_setting: 123
+
+# --- Image Processing Settings (新規追加) ---
+image_processing:
+  # PillowのDecompressionBomb保護のための最大許容ピクセル数 (コメントアウトまたは非常に大きな値を設定)
+  # NoneにするとPillowの内部デフォルト(約89MP)に依存する。
+  # アプリケーションとして明確な上限を設けたい場合に設定。
+  # 例: 15000 * 15000 = 225,000,000 (約2.25億ピクセル)
+  pillow_max_image_pixels: 225000000
+
+  # preprocess_uploaded_image 関数のデフォルト値
+  default_max_pixels_for_resizing: 4000000  # リサイズ時の最大総ピクセル数 (例: 2000x2000)
+  default_output_format: "JPEG"            # デフォルトの出力画像フォーマット
+  default_jpeg_quality: 85                 # JPEG出力時の品質
+
+  # サポートするMIMEタイプと変換ルール
+  supported_mime_types:
+    - "image/png"
+    - "image/jpeg"
+    - "image/webp"
+    # HEIC/HEIFは pillow-heif がインストールされていれば有効化も検討
+    # - "image/heic"
+    # - "image/heif"
+  convertable_mime_types: # キー: 変換元MIME, 値: 変換先MIME (Geminiサポート形式に合わせる)
+    "image/gif": "image/png"
+    "image/bmp": "image/png"
+    # 必要に応じて他の変換ルールを追加
+    # 例: "image/tiff": "image/png"
