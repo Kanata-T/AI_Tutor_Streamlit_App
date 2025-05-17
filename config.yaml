@@ -40,6 +40,27 @@ image_processing:
   default_max_pixels_for_resizing: 4000000  # リサイズ時の最大総ピクセル数 (例: 2000x2000)
   default_output_format: "JPEG"            # デフォルトの出力画像フォーマット
   default_jpeg_quality: 85                 # JPEG出力時の品質
+  apply_grayscale: true
+  # apply_trimming: false # Pillowベースのトリミングは一旦コメントアウトまたは削除も検討
+
+  opencv_trimming:
+    apply: true
+    padding: 0  # ★固定値★
+    adaptive_thresh_block_size: 11 # ★固定値★
+    adaptive_thresh_c: 7         # ★固定値★
+    min_contour_area_ratio: 0.00005 # ★固定値★
+    gaussian_blur_kernel: [5, 5] # ★固定値★
+    morph_open_apply: false      # ★固定値★
+    morph_open_kernel_size: 3
+    morph_open_iterations: 1
+    morph_close_apply: false     # ★固定値★
+    morph_close_kernel_size: 3
+    morph_close_iterations: 1
+    haar_apply: false # デフォルトはFalse
+    haar_rect_h: 20
+    haar_peak_threshold: 10.0
+    h_proj_apply: false # デフォルトはFalse
+    h_proj_threshold_ratio: 0.01
 
   # サポートするMIMEタイプと変換ルール
   supported_mime_types:

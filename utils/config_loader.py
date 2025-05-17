@@ -58,19 +58,25 @@ def get_image_processing_config() -> dict:
     img_proc_conf = config.get("image_processing", {})
     if not isinstance(img_proc_conf, dict):
         print(f"Warning: 'image_processing' section in config.yaml is not a valid dictionary. Using defaults.")
-        return {
-            "pillow_max_image_pixels": 225000000,
-            "default_max_pixels_for_resizing": 4000000,
-            "default_output_format": "JPEG",
-            "default_jpeg_quality": 85,
-            "supported_mime_types": ["image/png", "image/jpeg", "image/webp"],
-            "convertable_mime_types": {"image/gif": "image/png", "image/bmp": "image/png"}
-        }
+        img_proc_conf = {}  # 強制的に空辞書
+
+    # opencv_trimming セクションのデフォルト値をここで保証する
+    opencv_trim_default = {
+        "apply": False, # デフォルトはFalseにしておくのが安全
+        "padding": 10,
+        "adaptive_thresh_block_size": 11,
+        "adaptive_thresh_c": 5,
+        "min_contour_area_ratio": 0.001,
+        "gaussian_blur_kernel": [5, 5]
+    }
+
     return {
         "pillow_max_image_pixels": img_proc_conf.get("pillow_max_image_pixels", 225000000),
         "default_max_pixels_for_resizing": img_proc_conf.get("default_max_pixels_for_resizing", 4000000),
         "default_output_format": img_proc_conf.get("default_output_format", "JPEG"),
         "default_jpeg_quality": img_proc_conf.get("default_jpeg_quality", 85),
+        "apply_grayscale": img_proc_conf.get("apply_grayscale", True),
+        "opencv_trimming": img_proc_conf.get("opencv_trimming", opencv_trim_default),
         "supported_mime_types": img_proc_conf.get("supported_mime_types", ["image/png", "image/jpeg", "image/webp"]),
         "convertable_mime_types": img_proc_conf.get("convertable_mime_types", {"image/gif": "image/png", "image/bmp": "image/png"})
     }
