@@ -43,7 +43,7 @@ def get_image_orientation(img: Image.Image) -> Optional[int]:
             if k in ExifTags.TAGS and ExifTags.TAGS[k] == 'Orientation':
                 return v
     except Exception as e:
-        print(f"[image_utils] Warning: Could not get EXIF data: {e}") # printは後でloggingに置換
+        print(f"[image_processor] Warning: Could not get EXIF data: {e}")
         return None
     return None
 
@@ -114,10 +114,11 @@ def preprocess_uploaded_image(
 
     try:
         img = Image.open(BytesIO(uploaded_file_data))
-        # correct_image_orientation_from_exif関数は既存のものを利用
         img = correct_image_orientation_from_exif(img)
+        print(f"[image_processor] Debug: Orientation corrected. Mode: {img.mode}, Size: {img.size}")
 
         if img.mode == 'RGBA' or img.mode == 'LA' or (img.mode == 'P' and 'transparency' in img.info):
+            print(f"[image_processor] Debug: Alpha channel detected (mode: {img.mode}). Converting to RGB with white background.")
             try:
                 img_rgb = Image.new("RGB", img.size, (255, 255, 255))
                 img_rgb.paste(img, mask=img.split()[-1])
@@ -125,7 +126,10 @@ def preprocess_uploaded_image(
             except Exception:
                 img = img.convert('RGB')
         elif img.mode != 'RGB':
+            print(f"[image_processor] Debug: Mode is {img.mode}. Converting to RGB.")
             img = img.convert('RGB')
+        
+        print(f"[image_processor] Debug: Converted to RGB. Mode: {img.mode}, Size: {img.size}")
 
         current_pixels = img.width * img.height
         if max_pixels > 0 and current_pixels > max_pixels:
@@ -133,9 +137,12 @@ def preprocess_uploaded_image(
             new_width = int(img.width * scale_factor)
             new_height = int(img.height * scale_factor)
             if new_width >= 1 and new_height >= 1:
+                print(f"[image_processor] Debug: Resizing from {img.size} to ({new_width}, {new_height}).")
                 img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
             else:
                 print(f"[image_processor] Warning: Resize resulted in zero dimension for {original_mime_type}. Skipping resize.")
+        
+        print(f"[image_processor] Debug: Resized (if needed). Final size: {img.size}")
 
         output_bytes_io = BytesIO()
         save_kwargs = {}
@@ -143,6 +150,8 @@ def preprocess_uploaded_image(
             save_kwargs['quality'] = jpeg_quality
         img.save(output_bytes_io, format=target_output_format, **save_kwargs)
         processed_image_data = output_bytes_io.getvalue()
+        
+        print(f"[image_processor] Debug: Saved to bytes. Format: {target_output_format}, Size: {len(processed_image_data) / 1024:.1f} KB")
 
         return {
             "mime_type": processed_mime_type,
