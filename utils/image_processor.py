@@ -1,533 +1,392 @@
 # utils/image_processor.py
-
-from PIL import Image, ExifTags
+from PIL import Image # Image.MAX_IMAGE_PIXELS の設定のため
 from io import BytesIO
 from typing import Optional, Dict, Literal, Tuple, List, Any
-from utils import config_loader  # config_loader をインポート
-import cv2  # ★ OpenCV をインポート ★
-import numpy as np  # ★ Numpy をインポート ★
-from scipy.signal import argrelmax # ★ scipyからargrelmaxをインポート ★
+
+# config_loader と分割した画像処理部品をインポート
+from . import config_loader
+from .image_processing_parts.base_image_utils import (
+    correct_image_orientation,
+    convert_to_rgb_with_alpha_handling,
+    apply_grayscale_pillow,
+    resize_image_pillow,
+    image_to_bytes,
+    cv_image_to_bytes  # ★ 追加 (ocr_processors から返されたデバッグCV画像をバイト化するため)
+)
+from .image_processing_parts.contour_trimmers import trim_image_by_contours
+from .image_processing_parts.opencv_pipeline_utils import (
+    convert_pil_to_cv_gray,
+    apply_adaptive_threshold,
+)
+
+# --- 追加: OCRベーストリミング用ユーティリティのインポート ---
+from .image_processing_parts.ocr_processors import (
+    trim_image_by_ocr_text_bounds,
+    PYTESSERACT_AVAILABLE as OCR_PROCESSORS_PYTESSERACT_AVAILABLE  # 別名でインポートして衝突を避ける
+)
 
 # --- 設定値読み込み ---
-IMG_PROC_CONFIG = config_loader.get_image_processing_config()
-print(f"[image_processor] Debug: Loaded IMG_PROC_CONFIG from loader: {IMG_PROC_CONFIG}")
+_full_config = config_loader.get_config()
+IMG_PROC_CONFIG = _full_config.get("image_processing", {})
 
 # Pillowの最大ピクセル数設定
-pillow_max_pixels_cfg = IMG_PROC_CONFIG.get("pillow_max_image_pixels")
-if pillow_max_pixels_cfg is not None:
+pillow_max_pixels_cfg = IMG_PROC_CONFIG.get("pillow_max_image_pixels", 225000000) # デフォルト2.25億ピクセル
+if pillow_max_pixels_cfg is not None and pillow_max_pixels_cfg > 0: # 0以下は無効とみなす
     try:
         Image.MAX_IMAGE_PIXELS = int(pillow_max_pixels_cfg)
     except (ValueError, TypeError):
         print(f"[image_processor] Warning: Invalid 'pillow_max_image_pixels' in config: {pillow_max_pixels_cfg}. Using Pillow default.")
-        Image.MAX_IMAGE_PIXELS = None
-else:
-    Image.MAX_IMAGE_PIXELS = None
+        Image.MAX_IMAGE_PIXELS = None # Pillowの内部デフォルトに任せる
+else: # Noneまたは0以下の場合
+    Image.MAX_IMAGE_PIXELS = None # Pillowの内部デフォルトに任せる
 
+# MIMEタイプ関連
 SUPPORTED_MIME_TYPES = IMG_PROC_CONFIG.get("supported_mime_types", ["image/png", "image/jpeg", "image/webp"])
 CONVERTABLE_MIME_TYPES = IMG_PROC_CONFIG.get("convertable_mime_types", {"image/gif": "image/png", "image/bmp": "image/png"})
-DEFAULT_MAX_PIXELS = IMG_PROC_CONFIG.get("default_max_pixels_for_resizing", 4000000)
-DEFAULT_OUTPUT_FORMAT = IMG_PROC_CONFIG.get("default_output_format", "JPEG").upper()
+
+# preprocess_uploaded_image 関数のデフォルト引数値
+DEFAULT_MAX_PIXELS_RESIZE = IMG_PROC_CONFIG.get("default_max_pixels_for_resizing", 4000000) # 例: 2000x2000
+DEFAULT_OUTPUT_FORMAT: Literal["JPEG", "PNG"] = IMG_PROC_CONFIG.get("default_output_format", "JPEG").upper() # type: ignore
 DEFAULT_JPEG_QUALITY = IMG_PROC_CONFIG.get("default_jpeg_quality", 85)
-APPLY_GRAYSCALE_DEFAULT = IMG_PROC_CONFIG.get("apply_grayscale", True)
+DEFAULT_APPLY_GRAYSCALE = IMG_PROC_CONFIG.get("apply_grayscale", True)
 
-# OpenCVトリミングのデフォルト設定 (configから取得、ネスト構造を意識)
-DEFAULT_OPENCV_TRIM_SETTINGS = IMG_PROC_CONFIG.get("opencv_trimming", {})
-DEFAULT_OPENCV_TRIM_SETTINGS.setdefault("apply", True)
-DEFAULT_OPENCV_TRIM_SETTINGS.setdefault("padding", 10)
-DEFAULT_OPENCV_TRIM_SETTINGS.setdefault("adaptive_thresh_block_size", 11)
-DEFAULT_OPENCV_TRIM_SETTINGS.setdefault("adaptive_thresh_c", 5)
-DEFAULT_OPENCV_TRIM_SETTINGS.setdefault("min_contour_area_ratio", 0.001)
-DEFAULT_OPENCV_TRIM_SETTINGS.setdefault("gaussian_blur_kernel", [5, 5])
-DEFAULT_OPENCV_TRIM_SETTINGS.setdefault("morph_open_apply", False)
-DEFAULT_OPENCV_TRIM_SETTINGS.setdefault("morph_open_kernel_size", 3)
-DEFAULT_OPENCV_TRIM_SETTINGS.setdefault("morph_open_iterations", 1)
-DEFAULT_OPENCV_TRIM_SETTINGS.setdefault("morph_close_apply", False)
-DEFAULT_OPENCV_TRIM_SETTINGS.setdefault("morph_close_kernel_size", 3)
-DEFAULT_OPENCV_TRIM_SETTINGS.setdefault("morph_close_iterations", 1)
-DEFAULT_OPENCV_TRIM_SETTINGS.setdefault("haar_apply", False) # ★ Haar-Like
-DEFAULT_OPENCV_TRIM_SETTINGS.setdefault("haar_rect_h", 20)
-DEFAULT_OPENCV_TRIM_SETTINGS.setdefault("haar_peak_threshold", 10.0)
-DEFAULT_OPENCV_TRIM_SETTINGS.setdefault("h_proj_apply", False) # ★ 水平射影
-DEFAULT_OPENCV_TRIM_SETTINGS.setdefault("h_proj_threshold_ratio", 0.01)
+# OpenCVトリミングのデフォルトパラメータ (config.yaml からロード)
+# これは contour_trimmers.trim_image_by_contours に渡す trim_params の基礎となる
+DEFAULT_OPENCV_TRIM_PARAMS_FROM_CONFIG = IMG_PROC_CONFIG.get("opencv_trimming", {}).copy() # 必ずコピーして使う
 
-def get_image_orientation(img: Image.Image) -> Optional[int]:
-    """
-    画像のEXIF情報から向きタグを取得する。
+# configにキーが存在しない場合のフォールバック値を設定 (setdefaultは辞書を直接変更する)
+# contour_trimmers.py 側でも .get(key, default) でフォールバックするので、ここでは必須ではないが、
+# config構造の明確化や、このモジュールレベルでのデフォルト値保証には役立つ。
+DEFAULT_OPENCV_TRIM_PARAMS_FROM_CONFIG.setdefault("apply", True)
+DEFAULT_OPENCV_TRIM_PARAMS_FROM_CONFIG.setdefault("padding", 0)
+DEFAULT_OPENCV_TRIM_PARAMS_FROM_CONFIG.setdefault("adaptive_thresh_block_size", 11)
+DEFAULT_OPENCV_TRIM_PARAMS_FROM_CONFIG.setdefault("adaptive_thresh_c", 7)
+DEFAULT_OPENCV_TRIM_PARAMS_FROM_CONFIG.setdefault("min_contour_area_ratio", 0.00005)
 
-    Args:
-        img: PIL Imageオブジェクト。
+# gaussian_blur_kernel: contour_trimmers.py は (width, height) のタプルを期待。
+# config.yaml が "gaussian_blur_kernel": [w,h] 形式か、
+# "gaussian_blur_kernel_width" と "gaussian_blur_kernel_height" の個別キーを持つ場合に対応。
+gb_kernel_cfg = DEFAULT_OPENCV_TRIM_PARAMS_FROM_CONFIG.get("gaussian_blur_kernel")
+if isinstance(gb_kernel_cfg, list) and len(gb_kernel_cfg) == 2:
+    DEFAULT_OPENCV_TRIM_PARAMS_FROM_CONFIG["gaussian_blur_kernel"] = tuple(map(int, gb_kernel_cfg))
+elif "gaussian_blur_kernel_width" in DEFAULT_OPENCV_TRIM_PARAMS_FROM_CONFIG and \
+     "gaussian_blur_kernel_height" in DEFAULT_OPENCV_TRIM_PARAMS_FROM_CONFIG:
+    DEFAULT_OPENCV_TRIM_PARAMS_FROM_CONFIG["gaussian_blur_kernel"] = (
+        int(DEFAULT_OPENCV_TRIM_PARAMS_FROM_CONFIG.get("gaussian_blur_kernel_width", 0)),
+        int(DEFAULT_OPENCV_TRIM_PARAMS_FROM_CONFIG.get("gaussian_blur_kernel_height", 0))
+    )
+else: # どちらの形式もない場合のフォールバック
+    DEFAULT_OPENCV_TRIM_PARAMS_FROM_CONFIG.setdefault("gaussian_blur_kernel", (0, 0))
 
-    Returns:
-        EXIFの向きタグの値 (int)、または見つからない/エラーの場合はNone。
-    """
-    try:
-        exif = img.getexif()
-        if not exif: return None
-        for k, v in exif.items():
-            if k in ExifTags.TAGS and ExifTags.TAGS[k] == 'Orientation': return v
-    except Exception as e:
-        print(f"[image_processor] Warning: Could not get EXIF data: {e}")
-    return None
 
-def correct_image_orientation_from_exif(img: Image.Image) -> Image.Image:
-    """
-    画像のEXIF情報に基づいて向きを補正する。
+DEFAULT_OPENCV_TRIM_PARAMS_FROM_CONFIG.setdefault("morph_open_apply", False)
+DEFAULT_OPENCV_TRIM_PARAMS_FROM_CONFIG.setdefault("morph_open_kernel_size", 3)
+DEFAULT_OPENCV_TRIM_PARAMS_FROM_CONFIG.setdefault("morph_open_iterations", 1)
+DEFAULT_OPENCV_TRIM_PARAMS_FROM_CONFIG.setdefault("morph_close_apply", False)
+DEFAULT_OPENCV_TRIM_PARAMS_FROM_CONFIG.setdefault("morph_close_kernel_size", 3)
+DEFAULT_OPENCV_TRIM_PARAMS_FROM_CONFIG.setdefault("morph_close_iterations", 1)
+DEFAULT_OPENCV_TRIM_PARAMS_FROM_CONFIG.setdefault("haar_apply", True) # configの値を優先
+DEFAULT_OPENCV_TRIM_PARAMS_FROM_CONFIG.setdefault("haar_rect_h", 22)
+DEFAULT_OPENCV_TRIM_PARAMS_FROM_CONFIG.setdefault("haar_peak_threshold", 7.0)
+DEFAULT_OPENCV_TRIM_PARAMS_FROM_CONFIG.setdefault("h_proj_apply", True)
+DEFAULT_OPENCV_TRIM_PARAMS_FROM_CONFIG.setdefault("h_proj_threshold_ratio", 0.15)
 
-    Args:
-        img: PIL Imageオブジェクト。
-
-    Returns:
-        向きが補正されたPIL Imageオブジェクト。補正不要/失敗時は元画像を返す。
-    """
-    orientation = get_image_orientation(img)
-    if orientation == 2: img = img.transpose(Image.FLIP_LEFT_RIGHT)
-    elif orientation == 3: img = img.rotate(180)
-    elif orientation == 4: img = img.rotate(180).transpose(Image.FLIP_LEFT_RIGHT)
-    elif orientation == 5: img = img.rotate(-90, expand=True).transpose(Image.FLIP_LEFT_RIGHT)
-    elif orientation == 6: img = img.rotate(-90, expand=True)
-    elif orientation == 7: img = img.rotate(90, expand=True).transpose(Image.FLIP_LEFT_RIGHT)
-    elif orientation == 8: img = img.rotate(90, expand=True)
-    return img
-
-# === Haar-Like 行検出関数 ===
-def calc_haarlike_vertical(img_gray: np.ndarray, rect_h: int) -> Optional[np.ndarray]:
-    if rect_h <= 0 or rect_h % 2 != 0:
-        print(f"[image_processor_cv] Error: rect_h for Haar-Like must be positive even, got {rect_h}"); return None
-    if img_gray.ndim != 2: print(f"[image_processor_cv] Error: Haar-Like input must be grayscale."); return None
-    pattern_h, height = rect_h // 2, img_gray.shape[0]
-    if height <= rect_h: print(f"[image_processor_cv] Warn: Image height <= rect_h. Skipping Haar."); return np.array([])
-    out = np.zeros(height - rect_h)
-    try:
-        for i in range(height - rect_h):
-            s1_e, s2_s, s2_e = min(height,i+pattern_h), min(height,i+pattern_h), min(height,i+rect_h)
-            if s1_e <= i or s2_e <= s2_s: out[i]=0; continue
-            out[i] = np.mean(img_gray[i:s1_e, :]) - np.mean(img_gray[s2_s:s2_e, :])
-    except Exception as e: print(f"[image_processor_cv] Error in calc_haarlike_vertical: {e}"); return None
-    return out
-
-def peak_detection_vertical(data: np.ndarray, threshold: float) -> Tuple[np.ndarray, np.ndarray]:
-    if data is None or len(data) == 0: return np.array([]), np.array([])
-    peaks_start = argrelmax(data)[0]
-    peaks_end = argrelmax(-data)[0]
-    valid_starts = peaks_start[np.where(data[peaks_start] > threshold)]
-    valid_ends = peaks_end[np.where(np.abs(data[peaks_end]) > threshold)]
-    return valid_starts, valid_ends
-
-# === 水平射影プロファイル関数 ===
-def get_horizontal_projection(img_binary: np.ndarray, threshold_ratio: float = 0.01) -> Optional[Tuple[int, int]]:
-    if img_binary is None or img_binary.ndim != 2: return None
-    try:
-        projection = np.sum(img_binary, axis=0)
-        if np.max(projection) == 0: return None
-        threshold = np.max(projection) * threshold_ratio
-        text_cols = np.where(projection > threshold)[0]
-        if len(text_cols) == 0: return None
-        return np.min(text_cols), np.max(text_cols)
-    except Exception as e: print(f"[image_processor_cv] Error in get_horizontal_projection: {e}"); return None
-
-# === メインのトリミング関数 (trim_whitespace_opencv) ===
-def trim_whitespace_opencv(
-    img_pil: Image.Image,
-    padding: int, adaptive_thresh_block_size: int, adaptive_thresh_c: int,
-    min_contour_area_ratio: float, gaussian_blur_kernel: Tuple[int, int],
-    haar_apply: bool, haar_rect_h: int, haar_peak_threshold: float,
-    h_proj_apply: bool, h_proj_threshold_ratio: float,
-    morph_open_apply: bool, morph_open_kernel_size: int, morph_open_iterations: int,
-    morph_close_apply: bool, morph_close_kernel_size: int, morph_close_iterations: int,
-    debug_image_collector: Optional[List[Dict[str, any]]] = None
-) -> Tuple[Optional[Image.Image], Optional[Image.Image]]:
-    """
-    OpenCVで余白トリミングし、(トリミング後PIL画像, 二値化トリミングPIL画像)を返す。
-    """
-    img_pil_original_for_crop = img_pil.copy()
-    img_binary_for_ocr_crop = None
-    try:
-        # 1. グレースケール化
-        img_cv_gray = cv2.cvtColor(np.array(img_pil.convert('RGB')), cv2.COLOR_RGB2GRAY)
-        original_height, original_width = img_cv_gray.shape[:2]
-        if debug_image_collector is not None: debug_image_collector.append({"label": "CV Trim - 0. 入力(Gray)", "data": cv_to_pil_bytes(img_cv_gray.copy()), "mode": "L", "size": (original_width, original_height)})
-
-        # A-1. Haar-Likeで行の垂直範囲を推定
-        y_min_haar_final, y_max_haar_final = 0, original_height # 最終的に使うHaarのY範囲
-        if haar_apply:
-            print(f"[image_processor_cv] Applying Haar-Like: rect_h={haar_rect_h}, peak_thresh={haar_peak_threshold}")
-            haar_response = calc_haarlike_vertical(img_cv_gray, haar_rect_h)
-            if haar_response is not None and len(haar_response) > 0:
-                p_start, p_end = peak_detection_vertical(haar_response, haar_peak_threshold)
-                if len(p_start) > 0 and len(p_end) > 0:
-                    temp_y_min = np.min(p_start)
-                    valid_ends = p_end[p_end > temp_y_min]
-                    if len(valid_ends) > 0:
-                        y_min_haar_final = max(0, temp_y_min)
-                        y_max_haar_final = min(original_height, np.max(valid_ends) + haar_rect_h)
-                        print(f"[image_processor_cv] Haar Y-Range determined: {y_min_haar_final}-{y_max_haar_final}")
-                        if debug_image_collector is not None:
-                            viz_h = cv2.cvtColor(img_cv_gray.copy(), cv2.COLOR_GRAY2BGR)
-                            cv2.rectangle(viz_h, (0,y_min_haar_final),(original_width-1,y_max_haar_final),(0,255,255),2)
-                            debug_image_collector.append({"label": "CV Trim - A1. Haar Y-Range", "data": cv_to_pil_bytes(viz_h), "mode":"RGB", "size":(original_width,original_height)})
-
-        # 2. ブラー
-        img_blurred = img_cv_gray
-        if gaussian_blur_kernel[0] > 0 and gaussian_blur_kernel[1] > 0 and gaussian_blur_kernel[0] % 2 != 0 and gaussian_blur_kernel[1] % 2 != 0:
-            img_blurred = cv2.GaussianBlur(img_cv_gray, gaussian_blur_kernel, 0)
-            if debug_image_collector is not None:
-                debug_image_collector.append({"label": f"CV Trim - 1. ブラー(K{gaussian_blur_kernel})", "data": cv_to_pil_bytes(img_blurred.copy()), "mode": "L", "size": (original_width, original_height)})
-
-        # 3. 二値化
-        current_block_size = adaptive_thresh_block_size
-        if current_block_size < 3: current_block_size = 3
-        if current_block_size % 2 == 0: current_block_size += 1
-        img_thresh = cv2.adaptiveThreshold(
-            img_blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV,
-            current_block_size, adaptive_thresh_c
-        )
-        if debug_image_collector is not None:
-            debug_image_collector.append({"label": f"CV Trim - 2. 二値化(B{current_block_size},C{adaptive_thresh_c})", "data": cv_to_pil_bytes(img_thresh.copy()), "mode": "L", "size": (original_width, original_height)})
-
-        # A-2. 水平射影でテキストのX範囲を推定
-        x_min_hproj_final, x_max_hproj_final = 0, original_width # 最終的に使うH-ProjのX範囲
-        if h_proj_apply:
-            print(f"[image_processor_cv] Applying H-Projection: thresh_ratio={h_proj_threshold_ratio}")
-            proj_res = get_horizontal_projection(img_thresh, h_proj_threshold_ratio) # 二値化画像を使う
-            if proj_res:
-                x_min_hproj_final, x_max_hproj_final = proj_res
-                print(f"[image_processor_cv] H-Proj X-Range determined: {x_min_hproj_final}-{x_max_hproj_final}")
-                if debug_image_collector is not None:
-                    viz_hp = cv2.cvtColor(img_cv_gray.copy(), cv2.COLOR_GRAY2BGR)
-                    cv2.rectangle(viz_hp, (x_min_hproj_final,0),(x_max_hproj_final,original_height-1),(255,255,0),2)
-                    debug_image_collector.append({"label": "CV Trim - A2. H-Proj X-Range", "data": cv_to_pil_bytes(viz_hp), "mode":"RGB", "size":(original_width,original_height)})
-
-        # 4. モルフォロジー
-        img_morphed = img_thresh
-        if morph_open_apply and morph_open_kernel_size > 0:
-            k_open = morph_open_kernel_size if morph_open_kernel_size % 2 != 0 else morph_open_kernel_size + 1
-            kernel_open = np.ones((k_open, k_open), np.uint8)
-            img_morphed = cv2.morphologyEx(img_morphed, cv2.MORPH_OPEN, kernel_open, iterations=morph_open_iterations)
-            if debug_image_collector is not None:
-                debug_image_collector.append({"label": f"CV Trim - MorphOPEN(K{k_open},I{morph_open_iterations})", "data": cv_to_pil_bytes(img_morphed.copy()), "mode": "L", "size": (original_width, original_height)})
-        if morph_close_apply and morph_close_kernel_size > 0:
-            k_close = morph_close_kernel_size if morph_close_kernel_size % 2 != 0 else morph_close_kernel_size + 1
-            kernel_close = np.ones((k_close, k_close), np.uint8)
-            img_morphed = cv2.morphologyEx(img_morphed, cv2.MORPH_CLOSE, kernel_close, iterations=morph_close_iterations)
-            if debug_image_collector is not None:
-                debug_image_collector.append({"label": f"CV Trim - MorphCLOSE(K{k_close},I{morph_close_iterations})", "data": cv_to_pil_bytes(img_morphed.copy()), "mode": "L", "size": (original_width, original_height)})
-        contours_img_input = img_morphed
-
-        # 5. 輪郭検出
-        contours, hierarchy = cv2.findContours(contours_img_input, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if debug_image_collector is not None and contours:
-            img_all_contours_drawn = cv2.cvtColor(img_cv_gray.copy(), cv2.COLOR_GRAY2BGR)
-            cv2.drawContours(img_all_contours_drawn, contours, -1, (0,0,255), 1)
-            debug_image_collector.append({"label": "CV Trim - 3a. 全輪郭(フィルタ前)", "data": cv_to_pil_bytes(img_all_contours_drawn), "mode": "RGB", "size": (original_width, original_height)})
-        if not contours:
-            return img_pil_original_for_crop, None
-
-        # 6. 有効な輪郭の選択
-        min_abs_area = original_width * original_height * min_contour_area_ratio
-        valid_contours_list = []
-        for c_item in contours:
-            if cv2.contourArea(c_item) >= min_abs_area:
-                # ★ オプション: Haar/H-Proj範囲でさらにフィルタリング ★
-                apply_spatial_filter = haar_apply or h_proj_apply
-                if apply_spatial_filter:
-                    x_c, y_c, w_c, h_c = cv2.boundingRect(c_item)
-                    cx, cy = x_c + w_c//2, y_c + h_c//2
-                    in_haar_y = not haar_apply or (y_min_haar_final <= cy <= y_max_haar_final)
-                    in_hproj_x = not h_proj_apply or (x_min_hproj_final <= cx <= x_max_hproj_final)
-                    if in_haar_y and in_hproj_x:
-                        valid_contours_list.append(c_item)
-                else: # 空間フィルタなし
-                    valid_contours_list.append(c_item)
-        if debug_image_collector is not None and valid_contours_list:
-            img_valid_contours_drawn = cv2.cvtColor(img_cv_gray.copy(), cv2.COLOR_GRAY2BGR)
-            cv2.drawContours(img_valid_contours_drawn, valid_contours_list, -1, (0,255,0), 1)
-            debug_image_collector.append({"label": "CV Trim - 3b. 有効輪郭(フィルタ後)", "data": cv_to_pil_bytes(img_valid_contours_drawn), "mode": "RGB", "size": (original_width, original_height)})
-        if not valid_contours_list:
-            return img_pil_original_for_crop, None
-
-        # 7. 輪郭結合 & BBox計算
-        merged_x_min, merged_y_min = original_width, original_height
-        merged_x_max, merged_y_max = 0, 0
-        has_valid_bbox_from_contours = False
-        for contour_item in valid_contours_list:
-            x_c, y_c, w_c, h_c = cv2.boundingRect(contour_item)
-            merged_x_min = min(merged_x_min, x_c)
-            merged_y_min = min(merged_y_min, y_c)
-            merged_x_max = max(merged_x_max, x_c + w_c)
-            merged_y_max = max(merged_y_max, y_c + h_c)
-            has_valid_bbox_from_contours = True
-        if not has_valid_bbox_from_contours:
-            return img_pil_original_for_crop, None
-        x, y, w, h = merged_x_min, merged_y_min, merged_x_max - merged_x_min, merged_y_max - merged_y_min
-        if debug_image_collector is not None:
-            img_final_bbox_drawn = cv2.cvtColor(img_cv_gray.copy(), cv2.COLOR_GRAY2BGR)
-            cv2.rectangle(img_final_bbox_drawn, (x,y), (x+w,y+h), (255,0,0), 2)
-            debug_image_collector.append({"label": "CV Trim - 3c. 最終BoundingBox", "data": cv_to_pil_bytes(img_final_bbox_drawn), "mode": "RGB", "size": (original_width, original_height)})
-
-        # ★ 7b. 最終バウンディングボックスの補正 (Haar-Likeと水平射影の結果を適用) ★
-        final_x, final_y, final_w, final_h = x, y, w, h # 輪郭検出ベースのBBoxを初期値に
-
-        if haar_apply and y_max_haar_final > y_min_haar_final: # Haarの結果が有効なら
-            # HaarのY範囲を現在のBBoxにマージ（拡張）する
-            # ただし、輪郭検出の結果も尊重し、完全にHaarの結果で上書きはしない
-            # ここでは、輪郭検出で見つかったy, y+h と、Haarで見つかったy範囲を包含するようにする
-            new_y_min_merged = min(final_y, y_min_haar_final)
-            new_y_max_merged = max(final_y + final_h, y_max_haar_final)
-            final_y = new_y_min_merged
-            final_h = new_y_max_merged - final_y
-            print(f"[image_processor_cv] Applied Haar Y-correction to BBox: y={final_y}, h={final_h}")
-
-        if h_proj_apply and x_max_hproj_final > x_min_hproj_final: # 水平射影の結果が有効なら
-            # 水平射影のX範囲を現在のBBoxにマージ（拡張）する
-            new_x_min_merged = min(final_x, x_min_hproj_final)
-            new_x_max_merged = max(final_x + final_w, x_max_hproj_final)
-            final_x = new_x_min_merged
-            final_w = new_x_max_merged - final_x
-            print(f"[image_processor_cv] Applied H-Proj X-correction to BBox: x={final_x}, w={final_w}")
-
-        if debug_image_collector is not None and (haar_apply or h_proj_apply):
-            img_corrected_bbox_drawn = cv2.cvtColor(img_cv_gray.copy(), cv2.COLOR_GRAY2BGR)
-            # 輪郭検出のBBox (青) と、補正後のBBox (オレンジ) を両方描画して比較
-            cv2.rectangle(img_corrected_bbox_drawn, (x,y), (x+w,y+h), (255,0,0), 3) # 元の輪郭BBox (青)
-            cv2.rectangle(img_corrected_bbox_drawn, (final_x,final_y), (final_x+final_w,final_y+final_h), (0,165,255), 2) # 補正後BBox (オレンジ)
-            debug_image_collector.append({"label": "CV Trim - 3d. 補正後BBox", "data": cv_to_pil_bytes(img_corrected_bbox_drawn), "mode":"RGB", "size":(original_width,original_height)})
-
-        # 8. パディングと切り出し (補正後の final_x, final_y, final_w, final_h を使用)
-        x1, y1 = max(0, final_x - padding), max(0, final_y - padding)
-        x2, y2 = min(original_width, final_x + final_w + padding), min(original_height, final_y + final_h + padding)
-
-        if x2 <= x1 or y2 <= y1:
-            print(f"[image_processor_cv] Warning: Invalid crop region after padding/correction. Skipping trim.")
-            return img_pil_original_for_crop, None
-
-        cropped_img_pil = img_pil_original_for_crop.crop((x1, y1, x2, y2))
-        if debug_image_collector is not None:
-            debug_image_collector.append({"label": "CV Trim - 4a. トリミング結果(元)", "data": pil_to_bytes(cropped_img_pil.copy()), "mode": cropped_img_pil.mode, "size": cropped_img_pil.size})
-        # 二値化画像の同一範囲スライス
-        cropped_binary_np = contours_img_input[y1:y2, x1:x2]
-        if cropped_binary_np.size > 0:
-            img_binary_for_ocr_crop = Image.fromarray(cropped_binary_np, mode='L')
-            if debug_image_collector is not None:
-                debug_image_collector.append({"label": "CV Trim - 4b. トリミング結果(二値OCR用)", "data": pil_to_bytes(img_binary_for_ocr_crop.copy(), format_str="PNG"), "mode": "L", "size": img_binary_for_ocr_crop.size})
-        else:
-            print("[image_processor_cv] Warning: Cropped binary for OCR is empty.")
-        return cropped_img_pil, img_binary_for_ocr_crop
-    except Exception as e:
-        print(f"[image_processor_cv] Error in trim: {e}")
-        import traceback; traceback.print_exc()
-        return img_pil_original_for_crop, None
-
-# === バイト変換ヘルパー関数 (pil_to_bytes, cv_to_pil_bytes) ===
-def pil_to_bytes(img_pil: Image.Image, format_str: str = "PNG") -> Optional[bytes]: # format引数名を変更
-    if not img_pil: return None
-    try:
-        bio = BytesIO()
-        save_fmt = format_str.upper()
-        if save_fmt not in ["PNG", "JPEG"]: save_fmt = "PNG"
-        temp_img = img_pil.copy() # 元画像に影響を与えない
-        if save_fmt == "JPEG" and temp_img.mode not in ['RGB', 'L']:
-            if temp_img.mode == 'RGBA' or temp_img.mode == 'LA': # アルファがある場合は白背景でRGB化
-                bg = Image.new("RGB", temp_img.size, (255,255,255))
-                bg.paste(temp_img, mask=temp_img.split()[-1])
-                temp_img = bg
-            else:
-                temp_img = temp_img.convert('RGB')
-        temp_img.save(bio, format=save_fmt, quality=DEFAULT_JPEG_QUALITY if save_fmt == "JPEG" else None) # JPEG品質適用
-        return bio.getvalue()
-    except Exception as e: print(f"[image_processor] Error in pil_to_bytes: {e}"); return None
-
-def cv_to_pil_bytes(img_cv: np.ndarray, format_str: str = "PNG") -> Optional[bytes]:
-    if img_cv is None: return None
-    try:
-        if len(img_cv.shape) == 3 and img_cv.shape[2] == 3: # BGRカラー
-            img_pil = Image.fromarray(cv2.cvtColor(img_cv, cv2.COLOR_BGR2RGB))
-        elif len(img_cv.shape) == 2: # グレースケール
-            img_pil = Image.fromarray(img_cv, mode='L')
-        else: print(f"[image_processor] Error: cv_to_pil_bytes unexpected shape {img_cv.shape}"); return None
-        return pil_to_bytes(img_pil, format_str)
-    except Exception as e: print(f"[image_processor] Error in cv_to_pil_bytes: {e}"); return None
 
 # === メインの前処理関数 (preprocess_uploaded_image) ===
 def preprocess_uploaded_image(
-    uploaded_file_data: bytes, mime_type: str,
-    max_pixels: int = DEFAULT_MAX_PIXELS,
-    output_format: Literal["JPEG", "PNG"] = DEFAULT_OUTPUT_FORMAT,
-    jpeg_quality: int = DEFAULT_JPEG_QUALITY,
-    grayscale: bool = APPLY_GRAYSCALE_DEFAULT,
+    uploaded_file_data: bytes,
+    mime_type: str,
+    max_pixels: Optional[int] = None,
+    output_format: Optional[Literal["JPEG", "PNG"]] = None,
+    jpeg_quality: Optional[int] = None,
+    grayscale: Optional[bool] = None,
     apply_trimming_opencv_override: Optional[bool] = None,
     trim_params_override: Optional[Dict[str, Any]] = None
-) -> Optional[Dict[str, any]]:
+) -> Dict[str, Any]:
+    """
+    アップロードされた画像データを前処理するメイン関数。
+    向き補正、トリミング（オプション）、リサイズ、フォーマット変換などを行う。
+    戻り値: 処理結果を含む辞書。エラー時は "error" キーを含む。
+    """
     debug_images: List[Dict[str, Any]] = []
     if not uploaded_file_data:
-        print("[image_processor] Error: No image data provided for preprocessing.")
-        return None
+        return {"error": "画像データが提供されていません。", "debug_images": debug_images}
 
+    # --- 引数のデフォルト値解決 ---
+    effective_max_pixels = max_pixels if max_pixels is not None else DEFAULT_MAX_PIXELS_RESIZE
+    effective_output_format = (output_format if output_format is not None else DEFAULT_OUTPUT_FORMAT).upper()
+    effective_jpeg_quality = jpeg_quality if jpeg_quality is not None else DEFAULT_JPEG_QUALITY
+    effective_grayscale = grayscale if grayscale is not None else DEFAULT_APPLY_GRAYSCALE
+
+    # --- MIMEタイプと保存フォーマットの決定 ---
     original_mime_type = mime_type.lower()
-    target_output_format = output_format.upper()  # 大文字に統一
-    processed_mime_type = ""
-
+    target_format_for_final_bytes = effective_output_format
+    mime_type_for_llm = ""
     if original_mime_type in CONVERTABLE_MIME_TYPES:
-        processed_mime_type = CONVERTABLE_MIME_TYPES[original_mime_type]
-        if processed_mime_type == "image/png":
-            target_output_format = "PNG"
-        elif processed_mime_type == "image/jpeg":
-            target_output_format = "JPEG"
-        print(f"[image_processor] Info: Converting {original_mime_type} to {processed_mime_type} (output as {target_output_format}).")
-    elif original_mime_type in SUPPORTED_MIME_TYPES:
-        if target_output_format == "JPEG":
-            processed_mime_type = "image/jpeg"
-        elif target_output_format == "PNG":
-            processed_mime_type = "image/png"
+        mime_type_for_llm = CONVERTABLE_MIME_TYPES[original_mime_type]
+        if mime_type_for_llm == "image/png": target_format_for_final_bytes = "PNG"
+        elif mime_type_for_llm == "image/jpeg": target_format_for_final_bytes = "JPEG"
         else:
-            print(f"[image_processor] Warning: Unsupported target_output_format '{target_output_format}' for {original_mime_type}. Defaulting to {DEFAULT_OUTPUT_FORMAT}.")
-            target_output_format = DEFAULT_OUTPUT_FORMAT  # configのデフォルトを使用
-            processed_mime_type = "image/jpeg" if target_output_format == "JPEG" else "image/png"
+            target_format_for_final_bytes = "PNG"
+            mime_type_for_llm = "image/png"
+        print(f"[image_processor] Converting {original_mime_type} to {mime_type_for_llm} (final bytes as {target_format_for_final_bytes}).")
+    elif original_mime_type in SUPPORTED_MIME_TYPES:
+        mime_type_for_llm = original_mime_type
     else:
-        print(f"[image_processor] Error: Unsupported original MIME type '{original_mime_type}' and not in convertable list.")
-        return {"error": f"サポートされていない画像形式です: {original_mime_type}。"}
+        return {"error": f"サポートされていない入力画像形式です: {original_mime_type}。", "debug_images": debug_images}
+    if mime_type_for_llm not in ["image/jpeg", "image/png"]:
+        print(f"[image_processor] Warning: LLM MIME type '{mime_type_for_llm}' not directly supported by Gemini. Defaulting to image/png for LLM.")
+        mime_type_for_llm = "image/png"
+        if target_format_for_final_bytes != "PNG":
+            print(f"[image_processor] Also changing final bytes format to PNG due to LLM MIME type fallback.")
+            target_format_for_final_bytes = "PNG"
 
-    effective_cv_trim_settings = DEFAULT_OPENCV_TRIM_SETTINGS.copy()
-    if trim_params_override: effective_cv_trim_settings.update(trim_params_override)
-    should_apply_opencv_trim = effective_cv_trim_settings.get("apply", False)
-    if apply_trimming_opencv_override is not None: should_apply_opencv_trim = apply_trimming_opencv_override
-    
-    print(f"[image_processor] Final decision for should_apply_opencv_trim: {should_apply_opencv_trim}")
-    print(f"[image_processor] Effective OpenCV trim settings to be used: {effective_cv_trim_settings}")
+    # --- OpenCVトリミングのパラメータ解決 ---
+    current_cv_trim_params = DEFAULT_OPENCV_TRIM_PARAMS_FROM_CONFIG.copy()
+    if trim_params_override:
+        current_cv_trim_params.update(trim_params_override)
+    if apply_trimming_opencv_override is not None:
+        should_apply_opencv_trim = apply_trimming_opencv_override
+    else:
+        should_apply_opencv_trim = bool(current_cv_trim_params.get("apply", True))
+    current_cv_trim_params["apply"] = should_apply_opencv_trim
+
+    if should_apply_opencv_trim:
+        print(f"[image_processor] OpenCV Trimming will be applied with params: {current_cv_trim_params}")
+    else:
+        print(f"[image_processor] OpenCV Trimming will be skipped.")
 
     try:
-        img_initial_pil = Image.open(BytesIO(uploaded_file_data))
-        debug_images.append({
-            "label": "0. 初期読み込み (Pillow)",
-            "data": pil_to_bytes(img_initial_pil.copy()),
-            "mode": img_initial_pil.mode,
-            "size": img_initial_pil.size
-        })
-        img_oriented_pil = correct_image_orientation_from_exif(img_initial_pil.copy())
-        if img_oriented_pil.size != img_initial_pil.size or get_image_orientation(img_initial_pil) not in [None, 1]:
-            debug_images.append({
-                "label": "1. 向き補正後 (Pillow)",
-                "data": pil_to_bytes(img_oriented_pil.copy()),
-                "mode": img_oriented_pil.mode,
-                "size": img_oriented_pil.size
-            })
-        img_for_final_processing = img_oriented_pil.copy()
-        img_for_ocr_input_pil = None
+        img_pil = Image.open(BytesIO(uploaded_file_data))
+        initial_bytes_png = image_to_bytes(img_pil.copy(), target_format="PNG", jpeg_quality=effective_jpeg_quality)
+        if initial_bytes_png:
+            debug_images.append({"label": "0. Initial Load (as PNG)", "data": initial_bytes_png, "mode": img_pil.mode, "size": img_pil.size})
 
-        if should_apply_opencv_trim:
-            trimmed_pil, trimmed_binary_pil = trim_whitespace_opencv(
-                img_oriented_pil,
-                padding=int(effective_cv_trim_settings.get("padding")),
-                adaptive_thresh_block_size=int(effective_cv_trim_settings.get("adaptive_thresh_block_size")),
-                adaptive_thresh_c=int(effective_cv_trim_settings.get("adaptive_thresh_c")),
-                min_contour_area_ratio=float(effective_cv_trim_settings.get("min_contour_area_ratio")),
-                gaussian_blur_kernel=tuple(effective_cv_trim_settings.get("gaussian_blur_kernel")),
-                haar_apply=bool(effective_cv_trim_settings.get("haar_apply")),
-                haar_rect_h=int(effective_cv_trim_settings.get("haar_rect_h")),
-                haar_peak_threshold=float(effective_cv_trim_settings.get("haar_peak_threshold")),
-                h_proj_apply=bool(effective_cv_trim_settings.get("h_proj_apply")),
-                h_proj_threshold_ratio=float(effective_cv_trim_settings.get("h_proj_threshold_ratio")),
-                morph_open_apply=bool(effective_cv_trim_settings.get("morph_open_apply")),
-                morph_open_kernel_size=int(effective_cv_trim_settings.get("morph_open_kernel_size")),
-                morph_open_iterations=int(effective_cv_trim_settings.get("morph_open_iterations")),
-                morph_close_apply=bool(effective_cv_trim_settings.get("morph_close_apply")),
-                morph_close_kernel_size=int(effective_cv_trim_settings.get("morph_close_kernel_size")),
-                morph_close_iterations=int(effective_cv_trim_settings.get("morph_close_iterations")),
-                debug_image_collector=debug_images
-            )
-            if trimmed_pil:
-                img_for_final_processing = trimmed_pil
-                if trimmed_binary_pil:
-                    img_for_ocr_input_pil = trimmed_binary_pil
-                else:
-                    img_for_ocr_input_pil = trimmed_pil.convert('L') if grayscale else trimmed_pil
-            else:
-                img_for_ocr_input_pil = img_oriented_pil.convert('L') if grayscale else img_oriented_pil
-        else:
-            img_for_ocr_input_pil = img_oriented_pil.convert('L') if grayscale else img_oriented_pil.copy()
+        img_oriented = correct_image_orientation(img_pil)
+        if img_oriented.size != img_pil.size or \
+           (hasattr(img_pil, '_getexif') and img_pil._getexif() and img_pil._getexif().get(0x0112, 1) != 1):
+            oriented_bytes_png = image_to_bytes(img_oriented.copy(), target_format="PNG", jpeg_quality=effective_jpeg_quality)
+            if oriented_bytes_png:
+                debug_images.append({"label": "1. Orientation Corrected (as PNG)", "data": oriented_bytes_png, "mode": img_oriented.mode, "size": img_oriented.size})
 
-        # --- 表示/Vision用画像の処理 ---
-        img_display_vision = img_for_final_processing.copy()
-        img_before_rgb_conversion = img_for_final_processing.copy()
-        if img_for_final_processing.mode == 'RGBA' or img_for_final_processing.mode == 'LA' or (img_for_final_processing.mode == 'P' and 'transparency' in img_for_final_processing.info):
-            try:
-                img_rgb = Image.new("RGB", img_for_final_processing.size, (255, 255, 255))
-                img_rgb.paste(img_for_final_processing, mask=img_for_final_processing.split()[-1])
-                img_for_final_processing = img_rgb
-            except Exception:
-                img_for_final_processing = img_for_final_processing.convert('RGB')
-        elif img_for_final_processing.mode != 'RGB':
-            img_for_final_processing = img_for_final_processing.convert('RGB')
-        if img_for_final_processing.mode != img_before_rgb_conversion.mode or img_for_final_processing.size != img_before_rgb_conversion.size:
-            debug_images.append({
-                "label": "3. RGB変換後 (Pillow)",
-                "data": pil_to_bytes(img_for_final_processing.copy()),
-                "mode": img_for_final_processing.mode,
-                "size": img_for_final_processing.size
-            })
-        if grayscale:
-            img_before_grayscale = img_for_final_processing.copy()
-            img_for_final_processing = img_for_final_processing.convert('L')
-            debug_images.append({
-                "label": "4. グレースケール化後 (Pillow)",
-                "data": pil_to_bytes(img_for_final_processing.copy()),
-                "mode": img_for_final_processing.mode,
-                "size": img_for_final_processing.size
-            })
-        current_pixels = img_for_final_processing.width * img_for_final_processing.height
-        if max_pixels > 0 and current_pixels > max_pixels:
-            img_before_resize = img_for_final_processing.copy()
-            scale_factor = (max_pixels / current_pixels) ** 0.5
-            new_width = int(img_for_final_processing.width * scale_factor)
-            new_height = int(img_for_final_processing.height * scale_factor)
-            if new_width >= 1 and new_height >= 1:
-                img_for_final_processing = img_for_final_processing.resize((new_width, new_height), Image.Resampling.LANCZOS)
-            if img_for_final_processing.size != img_before_resize.size:
-                debug_images.append({
-                    "label": "5. リサイズ後 (Pillow)",
-                    "data": pil_to_bytes(img_for_final_processing.copy()),
-                    "mode": img_for_final_processing.mode,
-                    "size": img_for_final_processing.size
-                })
-
-        # --- OCR用画像のリサイズ ---
-        if img_for_ocr_input_pil and max_pixels > 0:
-            ocr_current_pixels = img_for_ocr_input_pil.width * img_for_ocr_input_pil.height
-            if ocr_current_pixels > max_pixels:
-                scale_factor = (max_pixels / ocr_current_pixels) ** 0.5
-                new_width = int(img_for_ocr_input_pil.width * scale_factor)
-                new_height = int(img_for_ocr_input_pil.height * scale_factor)
-                if new_width >= 1 and new_height >= 1:
-                    img_for_ocr_input_pil = img_for_ocr_input_pil.resize((new_width, new_height), Image.Resampling.LANCZOS)
-
-        # --- バイトデータ変換 ---
-        processed_image_data_display = pil_to_bytes(img_display_vision, format_str=target_output_format)
-        final_processed_mime_type = "image/jpeg" if target_output_format == "JPEG" else "image/png"
-
-        ocr_image_data_bytes = None
-        ocr_mime_type = "image/png"
-        if img_for_ocr_input_pil:
-            if img_for_ocr_input_pil.mode != 'L':
-                img_for_ocr_input_pil = img_for_ocr_input_pil.convert('L')
-            ocr_image_data_bytes = pil_to_bytes(img_for_ocr_input_pil, format_str="PNG")
-            if debug_image_collector is not None and ocr_image_data_bytes:
-                debug_images.append({"label": "Final OCR Input", "data": ocr_image_data_bytes, "mode": "L", "size": img_for_ocr_input_pil.size})
-
-        if not processed_image_data_display:
-            return {"error": "最終的な画像バイト変換に失敗しました。", "debug_images": debug_images}
-        result_dict = {
-            "processed_image": {"mime_type": final_processed_mime_type, "data": processed_image_data_display},
-            "debug_images": debug_images
+        # --- 結果を格納する辞書を準備 ---
+        processing_results = {
+            "contour_trim": {"main_image": None, "ocr_binary": None, "debug_label_prefix": "ContourTrim"},
+            "ocr_trim": {"main_image": None, "ocr_binary": None, "debug_label_prefix": "OCRTrim"}
         }
-        if ocr_image_data_bytes:
-            result_dict["ocr_input_image"] = {"mime_type": ocr_mime_type, "data": ocr_image_data_bytes}
-        return result_dict
 
+        # === A. 輪郭ベースのトリミング実行 ===
+        if bool(current_cv_trim_params.get("apply", True)):
+            print("[image_processor] Executing Contour-based trimming...")
+            contour_debug_collector: List[Dict[str, Any]] = []
+            temp_main_contour, temp_ocr_contour = trim_image_by_contours(
+                img_oriented.copy(),
+                trim_params=current_cv_trim_params,
+                jpeg_quality_for_debug_bytes=effective_jpeg_quality,
+                debug_image_collector=contour_debug_collector
+            )
+            processing_results["contour_trim"]["main_image"] = temp_main_contour
+            processing_results["contour_trim"]["ocr_binary"] = temp_ocr_contour
+            for item in contour_debug_collector:
+                item["label"] = f"ContourTrim - {item.get('label', '')}"
+                debug_images.append(item)
+            if not temp_main_contour:
+                 print("[image_processor] Contour-based trimming did not yield a main image.")
+        else:
+            print("[image_processor] Contour-based trimming is disabled by 'apply' flag.")
+            processing_results["contour_trim"]["main_image"] = img_oriented.copy()
+
+        # === B. OCRベースのトリミング実行 ===
+        if OCR_PROCESSORS_PYTESSERACT_AVAILABLE:
+            print("[image_processor] Executing OCR-based trimming...")
+            ocr_trim_padding = int(current_cv_trim_params.get("ocr_trim_padding", 0))
+            ocr_trim_lang = str(current_cv_trim_params.get("ocr_trim_lang", "eng+jpn"))
+            ocr_trim_min_conf = int(current_cv_trim_params.get("ocr_trim_min_conf", 25))
+            ocr_min_h = int(current_cv_trim_params.get("ocr_trim_min_box_height", 5))
+            ocr_max_h_r = float(current_cv_trim_params.get("ocr_trim_max_box_height_ratio", 0.3))
+            ocr_min_w = int(current_cv_trim_params.get("ocr_trim_min_box_width", 5))
+            ocr_max_w_r = float(current_cv_trim_params.get("ocr_trim_max_box_width_ratio", 0.8))
+            ocr_min_ar = float(current_cv_trim_params.get("ocr_trim_min_aspect_ratio", 0.05))
+            ocr_max_ar = float(current_cv_trim_params.get("ocr_trim_max_aspect_ratio", 20.0))
+            ocr_tess_cfg = str(current_cv_trim_params.get("ocr_tesseract_config", "--psm 6"))
+            
+            temp_main_ocr, debug_cv_ocr_trim = trim_image_by_ocr_text_bounds(
+                img_oriented.copy(),
+                padding=ocr_trim_padding,
+                lang=ocr_trim_lang,
+                min_confidence=ocr_trim_min_conf,
+                min_box_height=ocr_min_h,
+                max_box_height_ratio=ocr_max_h_r,
+                min_box_width=ocr_min_w,
+                max_box_width_ratio=ocr_max_w_r,
+                min_aspect_ratio=ocr_min_ar,
+                max_aspect_ratio=ocr_max_ar,
+                tesseract_config=ocr_tess_cfg,
+                return_debug_cv_image=True
+            )
+            processing_results["ocr_trim"]["main_image"] = temp_main_ocr
+            processing_results["ocr_trim"]["ocr_binary"] = None
+            if debug_cv_ocr_trim is not None:
+                debug_bytes_ocr = cv_image_to_bytes(debug_cv_ocr_trim, target_format="JPEG", jpeg_quality=effective_jpeg_quality)
+                if debug_bytes_ocr:
+                    debug_images.append({
+                        "label": "OCRTrim - Text Detection Detail", 
+                        "data": debug_bytes_ocr, "mode": "RGB",
+                        "size": (debug_cv_ocr_trim.shape[1], debug_cv_ocr_trim.shape[0])
+                    })
+            if temp_main_ocr and debug_images is not None:
+                 ocr_trimmed_final_bytes = image_to_bytes(temp_main_ocr.copy(), target_format="PNG")
+                 if ocr_trimmed_final_bytes:
+                    debug_images.append({
+                        "label": "OCRTrim - Final Cropped", "data": ocr_trimmed_final_bytes,
+                        "mode": temp_main_ocr.mode, "size": temp_main_ocr.size
+                    })
+            if not temp_main_ocr:
+                print("[image_processor] OCR-based trimming did not yield a main image.")
+        else:
+            print("[image_processor] OCR-based trimming skipped (Pytesseract not available).")
+            processing_results["ocr_trim"]["main_image"] = img_oriented.copy()
+
+        # --- 最終的な画像選択 (ここでは輪郭ベースを優先) ---
+        img_after_main_processing_step = processing_results["contour_trim"]["main_image"]
+        if img_after_main_processing_step is None:
+            img_after_main_processing_step = img_oriented.copy()
+        ocr_binary_intermediate = processing_results["contour_trim"]["ocr_binary"]
+
+        # --- 表示/Vision API用画像の最終処理 (Pillowベース) ---
+        img_display_vision = img_after_main_processing_step.copy()
+        img_display_vision = convert_to_rgb_with_alpha_handling(img_display_vision)
+        if debug_images is not None and img_display_vision.mode != img_after_main_processing_step.mode:
+            rgb_bytes = image_to_bytes(img_display_vision.copy(), target_format="PNG", jpeg_quality=effective_jpeg_quality)
+            if rgb_bytes:
+                debug_images.append({"label": "2. Display/Vision - RGB Converted (as PNG)", "data": rgb_bytes, "mode": img_display_vision.mode, "size": img_display_vision.size})
+        if effective_grayscale:
+            img_display_vision_prev_mode = img_display_vision.mode
+            img_display_vision = apply_grayscale_pillow(img_display_vision)
+            if debug_images is not None and img_display_vision.mode != img_display_vision_prev_mode:
+                gray_bytes = image_to_bytes(img_display_vision.copy(), target_format="PNG", jpeg_quality=effective_jpeg_quality)
+                if gray_bytes:
+                    debug_images.append({"label": "3. Display/Vision - Grayscale (as PNG)", "data": gray_bytes, "mode": img_display_vision.mode, "size": img_display_vision.size})
+        img_display_vision_prev_size = img_display_vision.size
+        img_display_vision = resize_image_pillow(img_display_vision, effective_max_pixels)
+        if debug_images is not None and img_display_vision.size != img_display_vision_prev_size:
+            resized_bytes = image_to_bytes(img_display_vision.copy(), target_format="PNG", jpeg_quality=effective_jpeg_quality)
+            if resized_bytes:
+                debug_images.append({"label": "4. Display/Vision - Resized (as PNG)", "data": resized_bytes, "mode": img_display_vision.mode, "size": img_display_vision.size})
+        final_display_vision_bytes = image_to_bytes(
+            img_display_vision, 
+            target_format=target_format_for_final_bytes,
+            jpeg_quality=effective_jpeg_quality
+        )
+        if not final_display_vision_bytes:
+            return {"error": "表示/Vision用画像のバイト変換に失敗しました。", "debug_images": debug_images}
+        if debug_images is not None:
+             debug_images.append({"label": f"5. Final Display/Vision ({target_format_for_final_bytes})", "data": final_display_vision_bytes, "mode": img_display_vision.mode, "size": img_display_vision.size})
+
+        # --- OCR入力用画像の準備 ---
+        final_ocr_input_bytes: Optional[bytes] = None
+        ocr_mime_type_llm = "image/png"
+        img_for_ocr: Optional[Image.Image] = None
+        ocr_source_description = "Unknown"
+        if ocr_binary_intermediate:
+            img_for_ocr = ocr_binary_intermediate.copy()
+            ocr_source_description = "From contour_trimmers (trimmed & binarized)"
+            print(f"[image_processor] OCR image: Using pre-binarized image from contour_trimmers.")
+        else:
+            source_image_for_binarization: Optional[Image.Image] = None
+            source_desc_key_for_binarization = ""
+            if should_apply_opencv_trim and img_after_main_processing_step:
+                source_image_for_binarization = img_after_main_processing_step.copy()
+                source_desc_key_for_binarization = "TrimmedMain"
+                print(f"[image_processor] OCR image: Attempting to binarize the '{source_desc_key_for_binarization}' image.")
+            elif not should_apply_opencv_trim and img_oriented:
+                source_image_for_binarization = img_oriented.copy()
+                source_desc_key_for_binarization = "OrientedOriginal_NoTrim"
+                print(f"[image_processor] OCR image: Attempting to binarize the '{source_desc_key_for_binarization}' image (trimming was skipped).")
+            elif img_oriented:
+                source_image_for_binarization = img_oriented.copy()
+                source_desc_key_for_binarization = "OrientedOriginal_Fallback"
+                print(f"[image_processor] OCR image: Fallback to binarizing '{source_desc_key_for_binarization}' image (trim failure or missing intermediate).")
+            else:
+                print(f"[image_processor] OCR image: Critical - No suitable source image found for binarization.")
+            if source_image_for_binarization:
+                cv_gray_for_ocr = convert_pil_to_cv_gray(source_image_for_binarization)
+                if cv_gray_for_ocr is not None:
+                    block_size = current_cv_trim_params.get("adaptive_thresh_block_size", DEFAULT_OPENCV_TRIM_PARAMS_FROM_CONFIG.get("adaptive_thresh_block_size", 11))
+                    c_val = current_cv_trim_params.get("adaptive_thresh_c", DEFAULT_OPENCV_TRIM_PARAMS_FROM_CONFIG.get("adaptive_thresh_c", 7))
+                    binary_cv_for_ocr = apply_adaptive_threshold(cv_gray_for_ocr, block_size, c_val)
+                    if binary_cv_for_ocr is not None:
+                        img_for_ocr = Image.fromarray(binary_cv_for_ocr, mode='L')
+                        ocr_source_description = f"Binarized from {source_desc_key_for_binarization} (block:{block_size}, c:{c_val})"
+                        print(f"[image_processor] OCR image: Successfully binarized from '{source_desc_key_for_binarization}'.")
+                        if debug_images is not None:
+                            debug_ocr_bytes = image_to_bytes(img_for_ocr.copy(), target_format="PNG")
+                            if debug_ocr_bytes:
+                                debug_images.append({
+                                    "label": f"OCR - Binarized ({source_desc_key_for_binarization})",
+                                    "data": debug_ocr_bytes, "mode": img_for_ocr.mode, "size": img_for_ocr.size
+                                })
+                    else:
+                        print(f"[image_processor] OCR image: Binarization failed for '{source_desc_key_for_binarization}'. Falling back to Pillow grayscale.")
+                        img_for_ocr = apply_grayscale_pillow(source_image_for_binarization.copy())
+                        ocr_source_description = f"Pillow Grayscale from {source_desc_key_for_binarization} (binarization failed)"
+                else:
+                    print(f"[image_processor] OCR image: CV Gray conversion failed for '{source_desc_key_for_binarization}'. Falling back to Pillow grayscale.")
+                    img_for_ocr = apply_grayscale_pillow(source_image_for_binarization.copy())
+                    ocr_source_description = f"Pillow Grayscale from {source_desc_key_for_binarization} (CV gray failed)"
+            else:
+                 print(f"[image_processor] OCR image: No source image available for OCR processing step. OCR will likely fail.")
+        if img_for_ocr:
+            img_for_ocr_prev_size = img_for_ocr.size
+            img_for_ocr_resized = resize_image_pillow(img_for_ocr, effective_max_pixels)
+            if debug_images is not None and img_for_ocr_resized.size != img_for_ocr_prev_size:
+                ocr_resized_bytes = image_to_bytes(img_for_ocr_resized.copy(), target_format="PNG")
+                if ocr_resized_bytes:
+                    debug_images.append({"label": f"OCR - Resized ({ocr_source_description})", "data": ocr_resized_bytes, "mode": img_for_ocr_resized.mode, "size": img_for_ocr_resized.size})
+            img_for_ocr = img_for_ocr_resized
+            if img_for_ocr.mode != 'L':
+                original_mode_for_log = img_for_ocr.mode
+                img_for_ocr = img_for_ocr.convert('L')
+                print(f"[image_processor] OCR image: Converted mode '{original_mode_for_log}' to 'L'.")
+            final_ocr_input_bytes = image_to_bytes(img_for_ocr, target_format="PNG")
+            if final_ocr_input_bytes and debug_images is not None:
+                    final_ocr_label = f"Final OCR Input (PNG) - Source: {ocr_source_description}"
+                    if len(final_ocr_label) > 100: final_ocr_label = final_ocr_label[:97] + "..."
+                    debug_images.append({
+                        "label": final_ocr_label,
+                        "data": final_ocr_input_bytes, 
+                        "mode": img_for_ocr.mode, 
+                        "size": img_for_ocr.size
+                    })
+        else:
+            print("[image_processor] Warning: img_for_ocr is None after processing attempts. No OCR image will be generated.")
+            ocr_source_description = "Generation Failed"
+
+        # --- 結果の組み立て ---
+        result: Dict[str, Any] = {
+            "processed_image": { "mime_type": mime_type_for_llm, "data": final_display_vision_bytes },
+            "debug_images": debug_images,
+            "ocr_source_description": ocr_source_description,
+            "contour_trimmed_image_data": None,
+            "ocr_trimmed_image_data": None,
+        }
+        if processing_results["contour_trim"]["main_image"]:
+            result["contour_trimmed_image_data"] = image_to_bytes(processing_results["contour_trim"]["main_image"].copy(), target_format=effective_output_format, jpeg_quality=effective_jpeg_quality)
+        if processing_results["ocr_trim"]["main_image"]:
+             result["ocr_trimmed_image_data"] = image_to_bytes(processing_results["ocr_trim"]["main_image"].copy(), target_format=effective_output_format, jpeg_quality=effective_jpeg_quality)
+        if final_ocr_input_bytes:
+            result["ocr_input_image"] = { "mime_type": ocr_mime_type_llm, "data": final_ocr_input_bytes }
+        return result
     except Image.DecompressionBombError as e_bomb:
-        return {"error": "画像が大きすぎるか、非対応の形式の可能性があります。", "debug_images": debug_images}
+        return {"error": f"画像が大きすぎるか、非対応の形式の可能性があります (DecompressionBomb): {e_bomb}", "debug_images": debug_images}
     except ValueError as e_val:
         if "Pixel count exceeds limit" in str(e_val):
-            return {"error": "画像のピクセル数が大きすぎます。", "debug_images": debug_images}
-        else:
-            return {"error": "画像処理中にエラーが発生しました。", "debug_images": debug_images}
+            return {"error": f"画像のピクセル数が大きすぎます (Pillow limit): {e_val}", "debug_images": debug_images}
+        print(f"[image_processor] ValueError during preprocessing: {e_val}")
+        import traceback; traceback.print_exc()
+        return {"error": f"画像処理中に予期せぬValueErrorが発生しました: {e_val}", "debug_images": debug_images}
     except Exception as e:
-        return {"error": "画像処理中に予期せぬエラーが発生しました。", "debug_images": debug_images}
+        import traceback
+        print(f"[image_processor] Unexpected critical error in preprocess_uploaded_image: {e}")
+        traceback.print_exc()
+        return {"error": f"画像処理中に予期せぬエラーが発生しました: {e}", "debug_images": debug_images}

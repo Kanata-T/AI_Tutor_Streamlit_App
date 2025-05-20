@@ -49,18 +49,35 @@ image_processing:
     adaptive_thresh_block_size: 11 # ★固定値★
     adaptive_thresh_c: 7         # ★固定値★
     min_contour_area_ratio: 0.00005 # ★固定値★
-    gaussian_blur_kernel: [5, 5] # ★固定値★
+    gaussian_blur_kernel_width: 5  # ★変更★
+    gaussian_blur_kernel_height: 5 # ★変更★
     morph_open_apply: false      # ★固定値★
     morph_open_kernel_size: 3
     morph_open_iterations: 1
     morph_close_apply: false     # ★固定値★
     morph_close_kernel_size: 3
     morph_close_iterations: 1
-    haar_apply: false # デフォルトはFalse
-    haar_rect_h: 20
-    haar_peak_threshold: 10.0
-    h_proj_apply: false # デフォルトはFalse
-    h_proj_threshold_ratio: 0.01
+    haar_apply: false # 元のapp.pyの固定値ではTrueだったため、合わせるか検討
+    haar_rect_h: 22 # 元のapp.pyの固定値
+    haar_peak_threshold: 7.0 # 元のapp.pyの固定値
+    h_proj_apply: false # 元のapp.pyの固定値ではTrueだったため、合わせるか検討
+    h_proj_threshold_ratio: 0.15 # 元のapp.pyの固定値
+
+    # --- ▼ OCRベーストリミング関連のパラメータ (新規追加) ▼ ---
+    ocr_trim_apply_as_fallback: true # 輪郭ベース失敗時にOCRトリミングを試みるか (true/false)
+    ocr_trim_padding: 0             # ★ パディングを0に
+    # ocr_trim_lang: "eng+jpn"     # 変更なし
+    # ocr_trim_min_conf: 25        # 変更なし
+    
+    # --- ▼ OCRトリミングのフィルタリング用パラメータ (新規追加) ▼ ---
+    ocr_trim_min_box_height: 5
+    ocr_trim_max_box_height_ratio: 0.3 # 画像高さの30%より大きい高さのボックスは除外
+    ocr_trim_min_box_width: 5
+    ocr_trim_max_box_width_ratio: 0.8  # 画像幅の80%より大きい幅のボックスは除外
+    ocr_trim_min_aspect_ratio: 0.05    # 幅/高さ がこれより小さいものは除外 (細長すぎるもの)
+    ocr_trim_max_aspect_ratio: 20.0    # 幅/高さ がこれより大きいものは除外 (横長すぎるもの)
+    ocr_tesseract_config: "--psm 6"    # Tesseractのconfigオプション (例: --psm 3, --psm 4, --psm 6 など)
+    # --- ▲ ここまで新規追加 ▲ ---
 
   # サポートするMIMEタイプと変換ルール
   supported_mime_types:
