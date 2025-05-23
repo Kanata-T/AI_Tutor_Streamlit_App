@@ -61,61 +61,8 @@ def get_config() -> Dict[str, Any]: # 型ヒントを Dict[str, Any] に統一
 # どうしてもこの関数経由で取得したい場合は、app.py の固定パラメータキーに合わせて値を返すように修正する。
 
 # 例: もし get_image_processing_config を残す場合の修正案 (app.pyのキー名に合わせる)
-def get_image_processing_defaults_for_app() -> Dict[str, Any]:
-    """
-    app.py が期待する形式で画像処理のデフォルト/固定値を返すための関数。
-    config.yaml から値を読み込み、不足分はハードコードされたデフォルトで補う。
-    app.py で直接 config を読む方が柔軟性が高い場合がある。
-    """
-    config = get_config()
-    img_proc_conf = config.get("image_processing", {})
-    if not isinstance(img_proc_conf, dict):
-        img_proc_conf = {}
-
-    cv_trim_conf = img_proc_conf.get("opencv_trimming", {})
-    if not isinstance(cv_trim_conf, dict):
-        cv_trim_conf = {}
-
-    # app.py で使われている固定パラメータのキー名と config.yaml のキー名をマッピング
-    # config.yaml のキー名が app.py の期待と一致している場合は直接 .get() で良い
-    fixed_cv_params = {
-        "apply": cv_trim_conf.get("apply", True), # config.yaml の値を優先
-        "padding": cv_trim_conf.get("padding", 0),
-        "adaptive_thresh_block_size": cv_trim_conf.get("adaptive_thresh_block_size", 11),
-        "adaptive_thresh_c": cv_trim_conf.get("adaptive_thresh_c", 7),
-        "min_contour_area_ratio": cv_trim_conf.get("min_contour_area_ratio", 0.00005),
-        "gaussian_blur_kernel_width": cv_trim_conf.get("gaussian_blur_kernel_width", 5), # config.yaml で分割されている前提
-        "gaussian_blur_kernel_height": cv_trim_conf.get("gaussian_blur_kernel_height", 5),# config.yaml で分割されている前提
-        "morph_open_apply": cv_trim_conf.get("morph_open_apply", False),
-        "morph_open_kernel_size": cv_trim_conf.get("morph_open_kernel_size", 3),
-        "morph_open_iterations": cv_trim_conf.get("morph_open_iterations", 1),
-        "morph_close_apply": cv_trim_conf.get("morph_close_apply", False),
-        "morph_close_kernel_size": cv_trim_conf.get("morph_close_kernel_size", 3),
-        "morph_close_iterations": cv_trim_conf.get("morph_close_iterations", 1),
-        "haar_apply": cv_trim_conf.get("haar_apply", True),
-        "haar_rect_h": cv_trim_conf.get("haar_rect_h", 22),
-        "haar_peak_threshold": cv_trim_conf.get("haar_peak_threshold", 7.0),
-        "h_proj_apply": cv_trim_conf.get("h_proj_apply", True),
-        "h_proj_threshold_ratio": cv_trim_conf.get("h_proj_threshold_ratio", 0.15),
-    }
-
-    fixed_other_params = {
-        "grayscale": img_proc_conf.get("apply_grayscale", True),
-        "output_format": img_proc_conf.get("default_output_format", "JPEG"),
-        "jpeg_quality": img_proc_conf.get("default_jpeg_quality", 85),
-        "max_pixels": img_proc_conf.get("default_max_pixels_for_resizing", 4000000),
-    }
-    
-    # 参考: 元の get_image_processing_config にあった他のキーも必要なら含める
-    # "pillow_max_image_pixels": img_proc_conf.get("pillow_max_image_pixels", 225000000),
-    # "supported_mime_types": img_proc_conf.get("supported_mime_types", ["image/png", "image/jpeg", "image/webp"]),
-    # "convertable_mime_types": img_proc_conf.get("convertable_mime_types", {"image/gif": "image/png", "image/bmp": "image/png"})
-
-    return {
-        "fixed_cv_params": fixed_cv_params,
-        "fixed_other_params": fixed_other_params
-    }
-
+# def get_image_processing_defaults_for_app() -> Dict[str, Any]:
+#     ...（関数本体を削除）...
 
 def get_config_value(key_path: str, default: Any = None) -> Any:
     """
@@ -199,9 +146,9 @@ if __name__ == '__main__':
         print(f"Clarification Question Prompt File: Not configured (template_key: {PROMPT_KEY_CLARIFICATION_QUESTION})")
     
     print("\n--- Testing get_image_processing_defaults_for_app (if used) ---")
-    img_proc_defaults = get_image_processing_defaults_for_app()
-    print(f"CV Params from defaults function: {img_proc_defaults.get('fixed_cv_params')}")
-    print(f"Other Params from defaults function: {img_proc_defaults.get('fixed_other_params')}")
+    # img_proc_defaults = get_image_processing_defaults_for_app()
+    # print(f"CV Params from defaults function: {img_proc_defaults.get('fixed_cv_params')}")
+    # print(f"Other Params from defaults function: {img_proc_defaults.get('fixed_other_params')}")
 
     print("\n--- Testing direct access to image processing config from get_config() ---")
     main_config = get_config()

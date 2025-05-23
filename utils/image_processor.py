@@ -28,14 +28,16 @@ IMG_PROC_CONFIG = _full_config.get("image_processing", {})
 
 # Pillowの最大許容ピクセル数設定 (DecompressionBomb対策)
 pillow_max_pixels_cfg = IMG_PROC_CONFIG.get("pillow_max_image_pixels", 225000000) # デフォルト2.25億ピクセル
-if pillow_max_pixels_cfg is not None and pillow_max_pixels_cfg > 0:
+if pillow_max_pixels_cfg is not None and isinstance(pillow_max_pixels_cfg, (int, float)) and pillow_max_pixels_cfg > 0: # 数値型かつ正の値かチェック
     try:
         Image.MAX_IMAGE_PIXELS = int(pillow_max_pixels_cfg)
-    except (ValueError, TypeError):
-        print(f"[image_processor] Warning: config.yaml内の 'pillow_max_image_pixels' ({pillow_max_pixels_cfg}) が不正です。Pillowのデフォルト値を使用します。")
-        Image.MAX_IMAGE_PIXELS = None # Pillowの内部デフォルトに任せる
-else: # Noneまたは0以下の場合もPillowデフォルト
-    Image.MAX_IMAGE_PIXELS = None
+    except (ValueError, TypeError): # int変換失敗はほぼないはずだが念のため
+        print(f"[image_processor] Warning: config.yaml内の 'pillow_max_image_pixels' ({pillow_max_pixels_cfg}) の設定に問題がある可能性があります。Pillowのデフォルト値を使用します。")
+        Image.MAX_IMAGE_PIXELS = None 
+else:
+    if pillow_max_pixels_cfg is not None: # Noneでなく、0以下や不正な型だった場合
+        print(f"[image_processor] Warning: config.yaml内の 'pillow_max_image_pixels' ({pillow_max_pixels_cfg}) は無効な値です。Pillowのデフォルト値を使用します。")
+    Image.MAX_IMAGE_PIXELS = None # Noneまたは0以下、不正な型の場合はPillowデフォルト
 
 # サポートMIMEタイプと変換ルール
 SUPPORTED_MIME_TYPES = IMG_PROC_CONFIG.get("supported_mime_types", ["image/png", "image/jpeg", "image/webp"])
@@ -343,38 +345,73 @@ def preprocess_uploaded_image(
         ocr_binary_intermediate: Optional[Image.Image] = None
         selected_trim_method_log = "未定"
 
+        contour_main = processing_results["contour_trim"]["main_image"]
+        contour_binary = processing_results["contour_trim"]["ocr_binary"]
+        ocr_main = processing_results["ocr_trim"]["main_image"]
+        # ocr_binary は OCRTrim からは直接提供されないので、後段で生成
+
         if effective_trimming_strategy == "ocr_then_contour":
-            if ocr_result_main is not None:
-                img_after_main_processing_step = ocr_result_main
-                ocr_binary_intermediate = None
+            if ocr_main:
+                img_after_main_processing_step = ocr_main
                 selected_trim_method_log = "OCRベーストリミング"
-            elif contour_result_main is not None:
-                img_after_main_processing_step = contour_result_main
-                ocr_binary_intermediate = contour_result_ocr_binary
-                selected_trim_method_log = "輪郭ベーストリミング (OCR失敗フォールバック)"
+            elif contour_main:
+                img_after_main_processing_step = contour_main
+                ocr_binary_intermediate = contour_binary
+                selected_trim_method_log = "輪郭ベーストリミング (OCR失敗/無効フォールバック)"
             else:
                 img_after_main_processing_step = img_oriented.copy()
-                ocr_binary_intermediate = None
-                selected_trim_method_log = "トリミングなし (両方失敗フォールバック)"
-        # 今後の拡張用: 他の戦略もここで分岐可能
-        else:
-            # デフォルトは ocr_then_contour と同じ挙動
-            if ocr_result_main is not None:
-                img_after_main_processing_step = ocr_result_main
-                ocr_binary_intermediate = None
+                selected_trim_method_log = "トリミングなし (両方失敗/無効フォールバック)"
+
+        elif effective_trimming_strategy == "contour_then_ocr":
+            if contour_main:
+                img_after_main_processing_step = contour_main
+                ocr_binary_intermediate = contour_binary
+                selected_trim_method_log = "輪郭ベーストリミング"
+            elif ocr_main:
+                img_after_main_processing_step = ocr_main
+                selected_trim_method_log = "OCRベーストリミング (輪郭失敗/無効フォールバック)"
+            else:
+                img_after_main_processing_step = img_oriented.copy()
+                selected_trim_method_log = "トリミングなし (両方失敗/無効フォールバック)"
+
+        elif effective_trimming_strategy == "ocr_only":
+            if ocr_main:
+                img_after_main_processing_step = ocr_main
+                selected_trim_method_log = "OCRベーストリミング (OCR Only)"
+            else:
+                img_after_main_processing_step = img_oriented.copy()
+                selected_trim_method_log = "トリミングなし (OCR Only失敗/無効フォールバック)"
+
+        elif effective_trimming_strategy == "contour_only":
+            if contour_main:
+                img_after_main_processing_step = contour_main
+                ocr_binary_intermediate = contour_binary
+                selected_trim_method_log = "輪郭ベーストリミング (Contour Only)"
+            else:
+                img_after_main_processing_step = img_oriented.copy()
+                selected_trim_method_log = "トリミングなし (Contour Only失敗/無効フォールバック)"
+
+        elif effective_trimming_strategy == "none":
+            img_after_main_processing_step = img_oriented.copy()
+            selected_trim_method_log = "トリミングなし (戦略: none)"
+            
+        else: # 未知の戦略またはデフォルトのフォールバック (ocr_then_contour と同様)
+            print(f"[image_processor] Warning: 未知のトリミング戦略 '{effective_trimming_strategy}'。ocr_then_contour にフォールバックします。")
+            if ocr_main:
+                img_after_main_processing_step = ocr_main
                 selected_trim_method_log = "OCRベーストリミング (未知戦略フォールバック)"
-            elif contour_result_main is not None:
-                img_after_main_processing_step = contour_result_main
-                ocr_binary_intermediate = contour_result_ocr_binary
+            elif contour_main:
+                img_after_main_processing_step = contour_main
+                ocr_binary_intermediate = contour_binary
                 selected_trim_method_log = "輪郭ベーストリミング (未知戦略・OCR失敗フォールバック)"
             else:
                 img_after_main_processing_step = img_oriented.copy()
-                ocr_binary_intermediate = None
                 selected_trim_method_log = "トリミングなし (未知戦略・両方失敗フォールバック)"
 
-        if img_after_main_processing_step is None:
-            print("[image_processor] Critical: メイン処理ステップ後の画像がNoneです。向き補正画像にフォールバックします。")
+        if img_after_main_processing_step is None: # このフォールバックは重要
+            print("[image_processor] Critical: メイン処理ステップ後の画像がNoneです。向き補正済み画像にフォールバックします。")
             img_after_main_processing_step = img_oriented.copy()
+            ocr_binary_intermediate = None # メインが None なら二値化もリセット
             selected_trim_method_log += " (Critical Fallback to Oriented)"
         print(f"[image_processor] 最終的なメイン画像の選択元: {selected_trim_method_log}")
 

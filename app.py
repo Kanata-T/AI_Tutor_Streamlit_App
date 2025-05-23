@@ -71,7 +71,7 @@ if "common_params_initialized" not in st.session_state:
         "h_proj_apply": cv_trim_config.get("h_proj_apply", False), # config.yaml で True に更新推奨
         "h_proj_threshold_ratio": cv_trim_config.get("h_proj_threshold_ratio", 0.15), # config.yaml で 0.15 に更新推奨
         # --- ▼ OCRベーストリミング関連のパラメータを config から読み込み ▼ ---
-        "ocr_trim_apply_as_fallback": cv_trim_config.get("ocr_trim_apply_as_fallback", True),
+        # "ocr_trim_apply_as_fallback": cv_trim_config.get("ocr_trim_apply_as_fallback", True),
         "ocr_trim_padding": cv_trim_config.get("ocr_trim_padding", 0),
         "ocr_trim_lang": cv_trim_config.get("ocr_trim_lang", "eng+jpn"),
         "ocr_trim_min_conf": cv_trim_config.get("ocr_trim_min_conf", 25),

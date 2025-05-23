@@ -53,7 +53,6 @@ image_processing:
     morph_close_apply: false                # モルフォロジー・クロージング処理を適用するか
     morph_close_kernel_size: 3              # クロージング処理のカーネルサイズ (奇数)
     morph_close_iterations: 1               # クロージング処理の繰り返し回数
-    ocr_trim_apply_as_fallback: true        # AIチューターモードで輪郭ベース失敗時にOCRトリミングを試みるかのフラグ
     ocr_trim_tuning_apply: true             # チューニングモードでOCRベーストリミングをデフォルトで有効にするかどうかのフラグ
     ocr_trim_padding: 0                     # OCRベーストリミング時のパディング
     ocr_trim_lang: "eng+jpn"              # OCR言語 (image_processor.py内でデフォルト引数として定義)
