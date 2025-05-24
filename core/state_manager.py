@@ -63,10 +63,17 @@ def add_message(role: Literal["user", "assistant", "system"], content: str):
     new_message: ChatMessage = {"role": role, "content": content}
     st.session_state.messages.append(new_message)
 
-def store_user_input(query_text: str, uploaded_file: Optional[Dict[str, Any]], topic: str):
-    """ユーザーの初期入力を保存する (uploaded_fileは処理済みの画像情報辞書を期待)"""
+def store_user_input(query_text: str, image_data_list: Optional[List[Dict[str, Any]]], topic: str):
+    """
+    ユーザーの初期入力を保存する。
+
+    Args:
+        query_text (str): ユーザーの質問テキスト。
+        image_data_list (Optional[List[Dict[str, Any]]]): Vision用画像データのリスト（各画像は辞書形式）。
+        topic (str): ユーザーが選択したトピック。
+    """
     st.session_state.user_query_text = query_text
-    st.session_state.uploaded_file_data = uploaded_file
+    st.session_state.uploaded_file_data = image_data_list
     st.session_state.selected_topic = topic
 
 def store_initial_analysis_result(result: InitialAnalysisResult):

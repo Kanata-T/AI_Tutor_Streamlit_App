@@ -7,54 +7,45 @@ from .type_definitions import ChatMessage, UploadedFileData, InitialAnalysisResu
 
 def perform_initial_analysis_logic() -> Optional[InitialAnalysisResult]:
     """
-    ユーザーの初期入力 (テキストクエリ、画像) に基づいて初期分析を実行する。
-
-    処理フロー:
-    1. セッション状態からユーザーの質問テキストとアップロードされた画像データを取得。
-    2. 入力がない場合はエラーを返す。
-    3. 画像データが存在すれば、`gemini_service.extract_text_from_image_llm` を呼び出してOCRを実行。
-       - OCR失敗時はエラーを返す。
-    4. ユーザーの質問テキストとOCR結果 (あれば) を用いて、
-       `gemini_service.analyze_initial_input_with_ocr` を呼び出し、質問の分析を依頼。
-       - 分析結果には、曖昧さ、カテゴリ、トピック、要約などが含まれることを期待。
-    5. 分析結果にOCRテキストを (もしあれば) `ocr_text_from_extraction`として追加し、結果を返す。
-       - LLMからの直接の分析結果にOCRテキストが含まれない場合に備え、別途追加する。
-
-    Returns:
-        Optional[InitialAnalysisResult]: 分析結果。エラー時は "error" キーを含む辞書。
+    ユーザーの初期入力 (テキストクエリ、複数画像) に基づいて初期分析を実行する。
     """
     query_text: str = st.session_state.get("user_query_text", "")
-    image_data_dict = st.session_state.get("uploaded_file_data", None) # これは {"mime_type": ..., "data": ...} 形式になっているはず
+    # ★ st.session_state.uploaded_file_data は画像のリストであることを期待
+    image_data_list: Optional[List[Dict[str, Any]]] = st.session_state.get("uploaded_file_data", None)
 
-    if not query_text and not image_data_dict:
+    if not query_text and not image_data_list:
         print("Error in tutor_logic: No query text or image data for analysis.")
-        return {"error": "質問内容のテキスト入力または画像のアップロードのいずれかを行ってください。"} # type: ignore
+        return {"error": "質問内容のテキスト入力または画像のアップロードのいずれかを行ってください。"}
 
     extracted_ocr_text: Optional[str] = None
-    if image_data_dict: # この image_data_dict をそのまま gemini_service.extract_text_from_image_llm に渡す
-        print(f"Tutor Logic: Performing OCR. Image MIME: {image_data_dict.get('mime_type')}")
-        extracted_ocr_text = gemini_service.extract_text_from_image_llm(image_data_dict) # 引数形式は合致
+    if image_data_list and len(image_data_list) > 0:
+        print(f"Tutor Logic: Performing OCR for {len(image_data_list)} image(s).")
+        # ★★★ 修正点: gemini_service.extract_text_from_image_llm に画像リストを渡す ★★★
+        extracted_ocr_text = gemini_service.extract_text_from_image_llm(image_data_list) # リストを渡す
+        
         if extracted_ocr_text is None:
-            print("Warning in tutor_logic: OCR failed or returned no text.")
-            return {"error": "アップロードされた画像から文字を抽出できませんでした。画像をご確認いただくか、テキストで質問を入力してください。"} # type: ignore
-        print(f"Tutor Logic: OCR Result (first 100 chars): '{extracted_ocr_text[:100]}...'")
+            print("Warning in tutor_logic: OCR failed or returned no text for all images.")
+            # エラーメッセージを少し具体的に
+            return {"error": "アップロードされた画像から文字を抽出できませんでした。いくつかの画像で問題があった可能性があります。"}
+        print(f"Tutor Logic: Combined OCR Result (first 100 chars): '{extracted_ocr_text[:100]}...'")
     
     print(f"Tutor Logic: Calling analysis with OCR. Query: '{query_text[:50]}...', OCR: '{str(extracted_ocr_text)[:50] if extracted_ocr_text else 'No OCR'}'")
+    
+    # ★★★ 検討点: analyze_initial_input_with_ocr にも画像リストを渡すか ★★★
+    # 現状の analyze_initial_input_with_ocr は ocr_text_from_image のみを受け取っている。
+    # もしVisionモデルで画像自体も分析に使うなら、image_data_list を渡すようにインターフェース変更が必要。
+    # 今回はまずOCRテキストのみで分析を進める前提とする。
     analysis_result: Optional[InitialAnalysisResult] = gemini_service.analyze_initial_input_with_ocr(
         query_text=query_text,
         ocr_text_from_image=extracted_ocr_text
+        # image_data_list_for_vision=image_data_list # ★将来的に追加検討★
     )
     print(f"Tutor Logic: Received final analysis result from LLM: {analysis_result}")
 
     if analysis_result is None:
-        # gemini_service内でAPI呼び出し自体に失敗した場合など
-        return {"error": "AIによる質問の分析処理中に予期せぬエラーが発生しました。"} # type: ignore
-    if "error" in analysis_result:
-        # gemini_service内のプロンプト読み込みやフォーマットエラー、JSONパースエラーなど
-        return analysis_result # エラー情報をそのまま上位に伝搬
-    
-    # LLMの分析結果に、こちらで抽出したOCRテキスト情報を追加する
-    # これにより、後続の処理でOCR結果を別途参照する手間を省き、分析結果オブジェクトに集約する
+        return {"error": "AIによる質問の分析処理中に予期せぬエラーが発生しました。"}
+    if "error" in analysis_result: # type: ignore
+        return analysis_result # type: ignore
     if extracted_ocr_text:
          analysis_result["ocr_text_from_extraction"] = extracted_ocr_text # type: ignore
 

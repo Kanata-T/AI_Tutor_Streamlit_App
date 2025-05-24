@@ -10,6 +10,7 @@ from core import state_manager, tutor_logic
 # utilsモジュールのインポート
 from utils.image_processor import preprocess_uploaded_image
 from utils.image_processing_parts.base_image_utils import auto_orient_image_opencv, image_to_bytes
+from utils.demo_case_loader import get_available_demo_cases, load_demo_case_data # ★新規インポート
 
 # uiヘルパーのインポート
 from .display_helpers import display_analysis_result # 相対インポート
@@ -28,6 +29,62 @@ def render_tutor_mode():
         # 注意: ここで st.rerun() を呼ぶと無限ループになる可能性。
         # 初期化後にUI要素が依存するセッション状態が変わる場合、呼び出し元 (app.py) の st.rerun() で対応。
         # 今回は state_manager.initialize_session_state() がUI表示に直接影響するメッセージをクリアする等ないので大丈夫そう。
+
+    # --- ★新規追加: デモケース選択UI (サイドバーに配置) ---
+    with st.sidebar:
+        st.header("デモケース選択")
+        available_cases = get_available_demo_cases()
+        if "selected_demo_case_id_tutor" not in st.session_state:
+            st.session_state.selected_demo_case_id_tutor = None
+
+        if available_cases:
+            selected_case_id_from_ui = st.selectbox(
+                "テストケースを選択:",
+                options=["---"] + available_cases,
+                index=0 if st.session_state.selected_demo_case_id_tutor is None \
+                      else (["---"] + available_cases).index(st.session_state.selected_demo_case_id_tutor),
+                key="tutor_demo_case_selector"
+            )
+
+            if selected_case_id_from_ui != "---" and selected_case_id_from_ui != st.session_state.selected_demo_case_id_tutor:
+                st.session_state.selected_demo_case_id_tutor = selected_case_id_from_ui
+                case_data = load_demo_case_data(selected_case_id_from_ui)
+                if case_data and "error" not in case_data:
+                    state_manager.reset_for_new_session()
+                    st.session_state.main_query_text_ui_module = case_data.get("question_text", "")
+                    
+                    # ★★★ 修正点: 全ての画像情報をリストで保持 ★★★
+                    st.session_state.demo_case_loaded_images = [] # 初期化
+                    if case_data.get("images"):
+                        st.session_state.demo_case_loaded_images = case_data["images"] # 画像情報リストをそのまま保存
+                        # UI表示用 (最初の画像情報を一時的に保持、または選択式にする準備)
+                        first_image_info = case_data["images"][0]
+                        st.session_state.current_display_image_bytes_from_demo = first_image_info["bytes"]
+                        st.session_state.current_display_image_mime_from_demo = first_image_info["mime_type"]
+                        st.session_state.current_display_image_filename_from_demo = first_image_info["filename"]
+                        st.info(f"デモケース '{selected_case_id_from_ui}' から {len(case_data['images'])}枚の画像がロードされました。")
+                        if len(case_data['images']) > 1:
+                            st.write("現在、送信時には最初の画像のみが使用されます。複数画像対応は開発中です。")
+                    else:
+                        # 画像がない場合のクリア処理
+                        st.session_state.current_display_image_bytes_from_demo = None
+                        st.session_state.current_display_image_mime_from_demo = None
+                        st.session_state.current_display_image_filename_from_demo = None
+                    st.session_state.demo_case_style = case_data.get("style_text")
+                    st.session_state.demo_case_understood = case_data.get("understood_text")
+                    state_manager.add_message("system", f"デモケース「{selected_case_id_from_ui}」がロードされました。")
+                    print(f"[TutorModeUI] Demo case '{selected_case_id_from_ui}' loaded with {len(st.session_state.demo_case_loaded_images)} images and session reset.")
+                    st.rerun()
+                elif case_data:
+                    st.error(f"デモケース '{selected_case_id_from_ui}' の読み込みエラー: {case_data['error']}")
+                    st.session_state.selected_demo_case_id_tutor = None
+            elif selected_case_id_from_ui == "---" and st.session_state.selected_demo_case_id_tutor is not None:
+                st.session_state.selected_demo_case_id_tutor = None
+                print("[TutorModeUI] Demo case selection cleared.")
+        else:
+            st.sidebar.info("利用可能なデモケースが `demo_cases` フォルダに見つかりません。")
+        st.sidebar.markdown("---")
+    # --- ここまでデモケース選択UI ---
 
     current_step_tutor_main_final = state_manager.get_current_step()
     message_container_tutor_main = st.container(border=False)
@@ -58,99 +115,172 @@ def render_tutor_mode():
         if current_step_tutor_main_final == state_manager.STEP_SESSION_END:
             if st.button("新しい質問の準備を始める", key="reset_main_flow_btn_end_tutor_ui_module"): # キー変更
                 state_manager.reset_for_new_session()
+                st.session_state.selected_demo_case_id_tutor = None
+                st.session_state.current_display_image_bytes_from_demo = None
+                st.session_state.current_display_image_mime_from_demo = None
+                st.session_state.current_display_image_filename_from_demo = None
                 st.rerun()
 
-        with st.form("submission_form_tutor_main_ui_module", clear_on_submit=True): # キー変更
+        with st.form("submission_form_tutor_main_ui_module", clear_on_submit=False): # キー変更
             st.markdown("#### 質問を入力してください:")
-            user_query_text_tf_f = st.text_input("質問テキスト", key="main_query_text_ui_module", label_visibility="collapsed")
-            uploaded_file_tf_f = st.file_uploader(
-                "画像 (任意)", 
-                type=["png","jpg","jpeg","webp","gif","bmp"], 
-                key="main_file_uploader_ui_module"
+            user_query_text_tf_f = st.text_input(
+                "質問テキスト", 
+                key="main_query_text_ui_module", 
+                label_visibility="collapsed",
+                value=st.session_state.get("main_query_text_ui_module","")
             )
+            uploaded_files_tf_f = None # 複数形に変更
+            demo_case_has_images = bool(st.session_state.get("demo_case_loaded_images"))
+
+            if demo_case_has_images:
+                st.info(f"デモケースから {len(st.session_state.demo_case_loaded_images)} 枚の画像がロード済みです。")
+                # (オプション) ロードされた画像の簡易プレビューやリスト表示
+                for idx, img_info in enumerate(st.session_state.demo_case_loaded_images):
+                    st.caption(f"  - {img_info['filename']}")
+                
+                # 手動で上書きアップロードする場合のUI
+                uploaded_files_tf_f_manual = st.file_uploader(
+                    "新しい画像をアップロード (デモ画像を全て上書き):", 
+                    type=["png","jpg","jpeg","webp","gif","bmp"], 
+                    key="main_file_uploader_ui_module_manual_multi", # キー変更
+                    accept_multiple_files=True # ★変更
+                )
+                if uploaded_files_tf_f_manual: # リストで返ってくる
+                    uploaded_files_tf_f = uploaded_files_tf_f_manual
+                    st.session_state.demo_case_loaded_images = [] # デモ画像をクリア
+                    st.session_state.selected_demo_case_id_tutor = None
+                    print("[TutorModeUI] Manual image upload overrides demo case images.")
+            else:
+                uploaded_files_tf_f = st.file_uploader(
+                    "画像 (任意、複数可):", 
+                    type=["png","jpg","jpeg","webp","gif","bmp"], 
+                    key="main_file_uploader_ui_module_multi", # キー変更
+                    accept_multiple_files=True # ★変更
+                )
+
             topic_opts_tf_f = ["", "文法", "語彙", "長文読解", "英作文", "その他"]
             selected_topic_tf_f = st.selectbox("トピック (任意)", topic_opts_tf_f, key="main_topic_select_ui_module")
             submit_btn_tf_f = st.form_submit_button("この内容で質問する")
 
             if submit_btn_tf_f:
-                if not user_query_text_tf_f and not uploaded_file_tf_f:
+                final_user_query_text = st.session_state.main_query_text_ui_module
+
+                # --- ▼ 複数画像処理の準備 ▼ ---
+                final_images_to_process: list = [] # [{"bytes": ..., "mime_type": ..., "filename": ...}, ...]
+
+                if uploaded_files_tf_f: # 手動アップロードを優先 (リストで返ってくる)
+                    for uploaded_file_obj in uploaded_files_tf_f:
+                        final_images_to_process.append({
+                            "bytes": uploaded_file_obj.getvalue(),
+                            "mime_type": uploaded_file_obj.type,
+                            "filename": uploaded_file_obj.name
+                        })
+                    print(f"[TutorModeUI] Using {len(final_images_to_process)} manually uploaded image(s).")
+                elif st.session_state.get("demo_case_loaded_images"): # デモケースの画像リスト
+                    for img_info in st.session_state.demo_case_loaded_images:
+                        final_images_to_process.append({
+                            "bytes": img_info["bytes"],
+                            "mime_type": img_info["mime_type"],
+                            "filename": img_info["filename"]
+                        })
+                    print(f"[TutorModeUI] Using {len(final_images_to_process)} image(s) from demo case.")
+                # --- ▲ 複数画像処理の準備ここまで ▲ ---
+
+                if not final_user_query_text and not final_images_to_process:
                     st.warning("テキスト入力または画像アップロードのいずれかを行ってください。")
                 else:
                     if current_step_tutor_main_final == state_manager.STEP_SESSION_END:
-                        state_manager.reset_for_new_session() # 新しいセッションのためにリセット
+                        state_manager.reset_for_new_session()
+                        st.session_state.selected_demo_case_id_tutor = None
+                        st.session_state.current_display_image_bytes_from_demo = None
+                        st.session_state.current_display_image_mime_from_demo = None
+                        st.session_state.current_display_image_filename_from_demo = None
 
-                    ocr_input_image_for_llm = None 
-                    debug_imgs_for_llm_run_final = []
+                    processed_vision_images_list = [] # Vision用画像の処理結果リスト
+                    processed_ocr_images_list = []    # OCR用画像の処理結果リスト (もし必要なら)
+                    all_debug_images_from_processing = [] # 全画像のデバッグ情報を集約
 
-                    if uploaded_file_tf_f:
-                        raw_bytes_tutor = uploaded_file_tf_f.getvalue()
-                        mime_type_tutor = uploaded_file_tf_f.type
-                        processed_image_bytes_for_preprocessing = None
-                        try:
-                            print(f"[TutorModeUI] Attempting OpenCV auto orientation for tutor mode: {uploaded_file_tf_f.name}")
-                            img_pil_tutor_temp = Image.open(BytesIO(raw_bytes_tutor))
-                            img_pil_auto_oriented_tutor = auto_orient_image_opencv(img_pil_tutor_temp)
-                            original_mime_tutor = mime_type_tutor.lower()
-                            output_fmt_for_session_tutor: str = "PNG"
-                            if original_mime_tutor == "image/jpeg":
-                                output_fmt_for_session_tutor = "JPEG"
-                            elif original_mime_tutor == "image/webp":
-                                try:
-                                    Image.open(BytesIO(b'')).save(BytesIO(), format='WEBP')
-                                    output_fmt_for_session_tutor = "WEBP"
-                                except Exception:
-                                    output_fmt_for_session_tutor = "PNG"
-                            jpeg_q_tutor = st.session_state.get("tuning_fixed_other_params", {}).get("jpeg_quality", 85)
-                            processed_image_bytes_for_preprocessing = image_to_bytes(
-                                img_pil_auto_oriented_tutor,
-                                target_format=output_fmt_for_session_tutor,
-                                jpeg_quality=jpeg_q_tutor
-                            )
-                            if not processed_image_bytes_for_preprocessing:
-                                st.warning("AIチューター: 画像の向き補正後のバイト変換に失敗。元の画像で処理試行。")
-                                processed_image_bytes_for_preprocessing = raw_bytes_tutor
-                            else:
-                                print("[TutorModeUI] Auto orientation successful for tutor mode.")
-                        except Exception as e_orient_tutor:
-                            st.error(f"AIチューター: 画像の自動向き補正中にエラー: {e_orient_tutor}")
-                            processed_image_bytes_for_preprocessing = raw_bytes_tutor
-                        if processed_image_bytes_for_preprocessing:
-                            print(f"[TutorModeUI] Preprocessing image for LLM (after auto-orientation attempt): {uploaded_file_tf_f.name}")
-                            fixed_cv = st.session_state.tuning_fixed_cv_params
-                            fixed_other = st.session_state.tuning_fixed_other_params
-                            preprocessing_res_llm_final = preprocess_uploaded_image(
-                                uploaded_file_data=processed_image_bytes_for_preprocessing,
-                                mime_type=mime_type_tutor,
-                                max_pixels=fixed_other["max_pixels"],
-                                output_format=fixed_other["output_format"],
-                                jpeg_quality=fixed_other["jpeg_quality"],
-                                grayscale=fixed_other["grayscale"],
-                                apply_trimming_opencv_override=fixed_cv.get("apply"),
-                                trim_params_override=fixed_cv
-                            )
-                            if preprocessing_res_llm_final and "error" not in preprocessing_res_llm_final:
-                                ocr_input_image_for_llm = preprocessing_res_llm_final.get("ocr_input_image")
-                                debug_imgs_for_llm_run_final = preprocessing_res_llm_final.get("debug_images", [])
-                                if ocr_input_image_for_llm:
-                                    state_manager.add_message("system", f"画像処理完了 (OCR入力形式: {ocr_input_image_for_llm.get('mime_type', 'N/A')})")
+                    if final_images_to_process:
+                        fixed_cv = st.session_state.get("tuning_fixed_cv_params", {})
+                        fixed_other = st.session_state.get("tuning_fixed_other_params", {})
+                        app_cfg = st.session_state.get("app_config", {}) # app.pyでロード済み想定
+                        img_proc_cfg = app_cfg.get("image_processing", {})
+                        default_strategy = img_proc_cfg.get("default_trimming_strategy", "ocr_then_contour")
+
+                        # 進捗バーの準備
+                        progress_bar = st.progress(0, text="画像を処理中...")
+                        for idx, img_data in enumerate(final_images_to_process):
+                            # st.write(f"Processing image {idx+1}/{len(final_images_to_process)}: {img_data['filename']}") # 進捗表示をprogressバーに変更
+                            progress_bar.progress((idx+1)/len(final_images_to_process), text=f"画像 {idx+1}/{len(final_images_to_process)}: {img_data['filename']} を処理中...")
+                            # まず向き補正
+                            oriented_bytes = None
+                            try:
+                                pil_temp = Image.open(BytesIO(img_data["bytes"]))
+                                pil_oriented = auto_orient_image_opencv(pil_temp)
+                                # ... (image_to_bytes で向き補正後バイト取得) ...
+                                original_mime = img_data["mime_type"].lower()
+                                output_fmt_session: str = "PNG"
+                                if original_mime == "image/jpeg": output_fmt_session = "JPEG"
+                                jpeg_q = fixed_other.get("jpeg_quality", 85)
+                                oriented_bytes = image_to_bytes(pil_oriented, target_format=output_fmt_session, jpeg_quality=jpeg_q) # type: ignore
+                            except Exception as e_orient:
+                                st.error(f"画像 '{img_data['filename']}' の向き補正エラー: {e_orient}")
+                                oriented_bytes = img_data["bytes"] # フォールバック
+
+                            if oriented_bytes:
+                                result_single_img = preprocess_uploaded_image(
+                                    uploaded_file_data=oriented_bytes,
+                                    mime_type=img_data["mime_type"],
+                                    max_pixels=fixed_other.get("max_pixels"),
+                                    output_format=fixed_other.get("output_format"),
+                                    jpeg_quality=fixed_other.get("jpeg_quality"),
+                                    grayscale=fixed_other.get("grayscale"),
+                                    apply_trimming_opencv_override=fixed_cv.get("apply"),
+                                    trim_params_override=fixed_cv,
+                                    trimming_strategy_override=default_strategy
+                                )
+                                if result_single_img and "error" not in result_single_img:
+                                    if result_single_img.get("processed_image"):
+                                        processed_vision_images_list.append(result_single_img["processed_image"])
+                                    if result_single_img.get("ocr_input_image"): # 必要に応じてOCR用も収集
+                                        processed_ocr_images_list.append(result_single_img["ocr_input_image"])
+                                    if result_single_img.get("debug_images"):
+                                        # デバッグ画像にファイル名を付与して区別
+                                        for dbg_img in result_single_img["debug_images"]:
+                                            dbg_img["label"] = f"[{img_data['filename']}] {dbg_img.get('label', '')}"
+                                        all_debug_images_from_processing.extend(result_single_img["debug_images"])
                                 else:
-                                    st.warning("OCR入力用画像の生成に問題がありましたが、処理を継続します。")
-                                    ocr_input_image_for_llm = preprocessing_res_llm_final.get("processed_image")
-                                    if ocr_input_image_for_llm:
-                                        state_manager.add_message("system", f"画像処理完了 (フォールバック形式: {ocr_input_image_for_llm.get('mime_type', 'N/A')})")
-                            elif preprocessing_res_llm_final and "error" in preprocessing_res_llm_final:
-                                st.error(f"画像処理エラー: {preprocessing_res_llm_final['error']}")
+                                    err_msg = result_single_img.get('error', '不明なエラー') if result_single_img else '不明なエラー'
+                                    st.error(f"画像 '{img_data['filename']}' の処理エラー: {err_msg}")
                             else:
-                                st.error("画像処理で予期せぬエラーが発生しました。")
-                        else:
-                            st.error("AIチューター: 画像データの準備に失敗しました。")
+                                st.error(f"画像 '{img_data['filename']}' の向き補正後データがありません。")
+                        progress_bar.empty() # 完了後に消す
+                    # 最終的なVision用画像をセッションに保存 (リスト形式)
+                    st.session_state.uploaded_file_data = processed_vision_images_list
+                    # (オプション) OCR用画像もリストでセッションに保存
+                    st.session_state.ocr_input_images_for_llm = processed_ocr_images_list 
                     
-                    st.session_state.last_debug_images_tutor_run_final_v3 = debug_imgs_for_llm_run_final # デバッグ用
-                    state_manager.store_user_input(user_query_text_tf_f, ocr_input_image_for_llm, selected_topic_tf_f)
+                    st.session_state.last_debug_images_tutor_run_final_v3 = all_debug_images_from_processing
+
+                    st.session_state.user_query_text = final_user_query_text
                     
-                    user_msg_content_final = f"質問: {user_query_text_tf_f}" + (" (画像あり)" if ocr_input_image_for_llm else "")
+                    state_manager.store_user_input(
+                        final_user_query_text, 
+                        processed_vision_images_list, # 画像リストを渡す
+                        selected_topic_tf_f
+                    )
+                    
+                    user_msg_content_final = f"質問: {final_user_query_text}" + (f" ({len(processed_vision_images_list)}枚の画像あり)" if processed_vision_images_list else "")
                     state_manager.add_message("user", user_msg_content_final)
                     state_manager.set_current_step(state_manager.STEP_INITIAL_ANALYSIS)
+                    
+                    # デモケース関連の一時情報をクリア
+                    st.session_state.demo_case_loaded_images = [] 
+                    st.session_state.current_display_image_bytes_from_demo = None
+                    st.session_state.current_display_image_mime_from_demo = None
+                    st.session_state.current_display_image_filename_from_demo = None
+                    # ... (他のデモケース一時情報もクリア) ...
+                    
                     st.rerun()
 
     elif current_step_tutor_main_final == state_manager.STEP_INITIAL_ANALYSIS:

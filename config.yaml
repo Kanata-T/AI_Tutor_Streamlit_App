@@ -1,7 +1,7 @@
 # LLM Model Settings
 llm_models:
-  text_model_name: "gemini-1.5-flash-preview-0514" # 例: テキスト生成モデル名
-  vision_model_name: "gemini-1.5-flash-preview-0514" # 例: 画像認識対応モデル名
+  text_model_name: "gemini-2.5-flash-preview-05-20" # 例: テキスト生成モデル名
+  vision_model_name: "gemini-2.5-flash-preview-05-20" # 例: 画像認識対応モデル名
   # temperature: 0.7 # 生成時の多様性を制御する温度パラメータ
   # top_p: 1.0       # Top-pサンプリングパラメータ
 

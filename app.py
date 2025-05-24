@@ -49,6 +49,9 @@ if "common_params_initialized" not in st.session_state:
     img_proc_config = app_config.get("image_processing", {})
     cv_trim_config = img_proc_config.get("opencv_trimming", {})
     
+    # --- ここで app_config をセッションに保存 ---
+    st.session_state.app_config = app_config
+    
     # AIチューターモードおよびチューニングモードの「固定/デフォルト」パラメータをconfigからロード
     # OpenCVトリミングパラメータ
     st.session_state.tuning_fixed_cv_params = {
