@@ -400,12 +400,14 @@ def generate_explanation_llm(
         clarified_request: str,
         request_category: str,
         explanation_style: str,
+        problem_context_summary: Optional[str],
         relevant_context: Optional[str] = None,
         conversation_history: Optional[List[ChatMessage]] = None
     ) -> Optional[str]:
     """明確化されたリクエストと選択されたスタイルに基づき、解説をLLMに生成させる。
     プロンプト: "generate_explanation"
-    期待するプレースホルダ: {clarified_request}, {request_category}, {explanation_style}, {relevant_context}, {conversation_history}
+    期待するプレースホルダ: {clarified_request}, {request_category}, {explanation_style}, 
+                         {problem_context_summary}, {relevant_context}, {conversation_history}
     """
     prompt_template = load_prompt_template(config_loader.PROMPT_KEY_GENERATE_EXPLANATION)
     if prompt_template is None:
@@ -417,12 +419,14 @@ def generate_explanation_llm(
         exclude_system_messages=True
     )
     context_text_to_pass = relevant_context if relevant_context else "なし"
+    problem_summary_to_pass = problem_context_summary if problem_context_summary else "（問題文の特定情報なし）"
 
     try:
         prompt = prompt_template.format(
             clarified_request=clarified_request,
             request_category=request_category,
             explanation_style=explanation_style,
+            problem_context_summary=problem_summary_to_pass,
             relevant_context=context_text_to_pass,
             conversation_history=history_text_for_prompt
         )
@@ -446,11 +450,12 @@ def generate_explanation_llm(
 
 def generate_followup_response_llm(
         conversation_history: List[ChatMessage],
-        user_latest_input: str
+        user_latest_input: str,
+        problem_context_summary: Optional[str]
     ) -> Optional[str]:
     """会話履歴とユーザーの最新の入力に基づき、フォローアップ応答をLLMに生成させる。
     プロンプト: "generate_followup"
-    期待するプレースホルダ: {conversation_history}, {user_followup_text}
+    期待するプレースホルダ: {conversation_history}, {user_followup_text}, {problem_context_summary}
     """
     prompt_template = load_prompt_template(config_loader.PROMPT_KEY_GENERATE_FOLLOWUP)
     if prompt_template is None:
@@ -461,11 +466,13 @@ def generate_followup_response_llm(
         default_empty_message="（会話履歴なし）",
         exclude_system_messages=True
     )
+    problem_summary_to_pass = problem_context_summary if problem_context_summary else "（問題文の特定情報なし）"
 
     try:
         prompt = prompt_template.format(
             conversation_history=history_text_for_prompt,
-            user_followup_text=user_latest_input 
+            user_followup_text=user_latest_input,
+            problem_context_summary=problem_summary_to_pass
         )
     except KeyError as e:
         template_key_name = config_loader.PROMPT_KEY_GENERATE_FOLLOWUP

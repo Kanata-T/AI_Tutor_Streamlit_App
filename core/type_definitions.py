@@ -55,7 +55,7 @@ class ProcessedImageInfo(TypedDict):
     original_filename: str
     image_type: ImageType
     mime_type: str
-    input_bytes: bytes
+    input_bytes: bytes # このバイトデータは前処理（トリミング等）後のもの
     ocr_text: Optional[str]
 
 # LLMからの初期分析結果の型 (例)
@@ -93,4 +93,17 @@ class ClarificationAnalysisResult(TypedDict, total=False):
     clarified_request: Optional[str]
     remaining_issue: Optional[str]
     ai_response_to_user: Optional[str]
-    # error: Optional[str] 
+    # error: Optional[str]
+
+# ★新規追加★
+class ProblemContext(TypedDict):
+    """
+    現在のセッションで扱っている問題文のコンテキスト情報。
+
+    Attributes:
+        initial_query (str): ユーザーが最初に入力した質問テキスト。
+        problem_images (List[ProcessedImageInfo]): 問題文と判断された画像のリスト。
+                                                  各画像の情報はProcessedImageInfo型。
+    """
+    initial_query: str
+    problem_images: List[ProcessedImageInfo]
