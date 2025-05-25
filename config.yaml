@@ -11,7 +11,8 @@ prompt_templates:
   extract_text_and_type_from_image: "extract_text_and_type_from_image"   # 画像からのテキスト抽出用
   analyze_query_with_ocr: "analyze_query_with_ocr"     # OCRテキストを用いた初期分析用
   clarification_question: "clarification_question"     # 生徒への明確化質問生成用
-  analyze_clarification_response: "analyze_clarification_response" # 明確化回答分析用
+  #analyze_clarification_response: "analyze_clarification_response" # 明確化回答分析用
+  plan_guidance: "plan_guidance" # 指導計画立案用
   generate_explanation: "generate_explanation"         # 解説生成用
   generate_followup: "generate_followup"               # フォローアップ質問生成用
   generate_summary: "generate_summary"                 # 対話要約生成用
@@ -82,3 +83,6 @@ image_processing:
     "image/gif": "image/png"
     "image/bmp": "image/png"
     # 必要に応じて他の変換ルールを追加 (例: "image/tiff": "image/png")
+# --- Application Logic Settings ---
+application_logic:
+  max_clarification_attempts: 1 # 明確化の最大試行回数

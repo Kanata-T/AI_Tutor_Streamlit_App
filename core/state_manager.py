@@ -18,6 +18,7 @@ STEP_INITIAL_ANALYSIS = "INITIAL_ANALYSIS"       # 入力された質問の初�
 STEP_CLARIFICATION_NEEDED = "CLARIFICATION_NEEDED" # 初期分析の結果、質問が曖昧で明確化が必要な状態
 STEP_CLARIFICATION_LOOP = "CLARIFICATION_LOOP"     # (現在は未使用)明確化の質問と応答のループ専用ステップとして定義していたが、
                                                  # STEP_CLARIFICATION_NEEDED とチャット入力でループを表現している
+STEP_PLAN_GUIDANCE = "PLAN_GUIDANCE"               # ★新規追加★ 指導計画立案ステップ
 STEP_SELECT_STYLE = "SELECT_STYLE"               # 解説スタイルの選択待ち
 STEP_GENERATE_EXPLANATION = "GENERATE_EXPLANATION" # 選択されたスタイルに基づき解説を生成中
 STEP_FOLLOW_UP_LOOP = "FOLLOW_UP_LOOP"             # 生成された解説に対するフォローアップ質問の受付中
@@ -51,6 +52,7 @@ DEFAULT_SESSION_VALUES: Dict[str, Any] = {
     "student_performance_analysis": None,               # 生徒のパフォーマンス分析結果
     "clarification_attempts": 0,                        # 明確化の試行回数 (0から開始)
     "current_problem_context": None,                    # ★新規追加★ 現在の問題文コンテキスト ProblemContext
+    "current_guidance_plan": None,                      # ★新規追加★ 生成された指導計画
 }
 
 def initialize_session_state():
@@ -91,6 +93,7 @@ def store_user_input(query_text: str, uploaded_files: Optional[List[UploadedFile
     st.session_state.processed_image_details_list = None
     st.session_state.current_problem_context = None
     st.session_state.clarified_request_text = None
+    st.session_state.current_guidance_plan = None # ★リセット対象に追加★
     st.session_state.current_explanation = None
     st.session_state.current_followup_response = None
     st.session_state.session_summary = None
@@ -174,3 +177,8 @@ def store_processed_image_details(image_details_list: Optional[List[ProcessedIma
 def store_problem_context(problem_context: Optional[ProblemContext]):
     """現在の問題コンテキストをセッション状態に保存する。"""
     st.session_state.current_problem_context = problem_context
+
+# ★新規追加★ `current_guidance_plan` を保存する関数
+def store_guidance_plan(guidance_plan: Optional[str]):
+    """生成された指導計画をセッション状態に保存する。"""
+    st.session_state.current_guidance_plan = guidance_plan

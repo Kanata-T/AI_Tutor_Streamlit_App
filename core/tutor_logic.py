@@ -125,73 +125,15 @@ def perform_initial_analysis_logic() -> Optional[InitialAnalysisResult]:
     return analysis_result
 
 
-def analyze_user_clarification_logic(user_response: str) -> Optional[ClarificationAnalysisResult]:
-    """
-    ユーザーの明確化応答を分析し、曖昧さが解消されたかを判定する。
-
-    必要なセッション状態:
-    - `user_query_text`: 元のユーザーの質問テキスト。
-    - `initial_analysis_result`: 初期分析の結果 (特に `reason_for_ambiguity`)。
-    - `uploaded_file_data`: 元の質問で画像が提供されたかの情報。
-    - `clarification_history`: AIの明確化質問とそれに対するユーザー応答の履歴。
-                         この履歴の最後から2番目のアシスタントの発言をAIの質問として使用する。
-    - `messages`: メインの会話履歴 (LLMへのコンテキストとして渡すため)。
-
-    Args:
-        user_response (str): ユーザーによる明確化の応答テキスト。
-
-    Returns:
-        Optional[ClarificationAnalysisResult]: 分析結果。エラー時は "error" キーを含む辞書。
-    """
-    original_query: str = st.session_state.get("user_query_text", "")
-    initial_analysis: Optional[InitialAnalysisResult] = st.session_state.get("initial_analysis_result", None)
-    
-    if not initial_analysis:
-        # この状況は通常発生しないはずだが、防御的にチェック
-        print("Error in tutor_logic: Initial analysis result not found for clarification.")
-        return {"error": "ユーザー応答を分析するための元の質問情報が見つかりません。"} # type: ignore
-        
-    reason_ambiguity_initial: str = initial_analysis.get("reason_for_ambiguity", "（詳細不明な曖昧さ）")
-    image_provided: bool = st.session_state.get("uploaded_file_data") is not None
-    
-    llm_question = "不明な質問" # デフォルト値
-    # 明確化ループ専用の履歴 `clarification_history` からAIの最後の質問を取得する。
-    # `app.py` のロジックにより、この関数が呼ばれる時点で `clarification_history` には
-    # [..., AIの質問, ユーザーの最新応答] の順でメッセージが格納されているはず。
-    clarification_hist: List[ChatMessage] = st.session_state.get("clarification_history", [])
-    if len(clarification_hist) >= 2 and clarification_hist[-2]["role"] == "assistant":
-        llm_question = clarification_hist[-2]["content"]
-    elif len(clarification_hist) == 1 and clarification_hist[0]["role"] == "assistant":
-        # ユーザー応答がclarification_historyに追加される「前」に呼ばれた場合のフォールバック(通常はない)
-        llm_question = clarification_hist[0]["content"]
-    else:
-        # AIの質問が見つからない場合はエラーログを残し、デフォルトの「不明な質問」を使用
-        print(f"Warning in tutor_logic: Could not retrieve AI's clarification question from clarification_history. History: {clarification_hist}")
-
-    # LLMに渡すメインの会話履歴 (デバッグやより広範な文脈理解のため)
-    main_conversation_history: List[ChatMessage] = st.session_state.get("messages", [])
-
-    if not all([original_query, user_response]): # llm_question は見つからなくても許容する（プロンプト側で対応想定）
-        missing_parts = []
-        if not original_query: missing_parts.append("元の質問")
-        # if llm_question == "不明な質問": missing_parts.append("AIの明確化質問") # なくても進める
-        if not user_response: missing_parts.append("ユーザーの応答")
-        if missing_parts: # reason_ambiguity_initial はなくても許容
-            print(f"Error in tutor_logic: Missing critical data for analyzing user clarification. Missing: {', '.join(missing_parts)}")
-            return {"error": f"ユーザー応答の分析に必要な情報 ({', '.join(missing_parts)}) が不足しています。"} # type: ignore
-
-    print(f"Tutor Logic: Analyzing user clarification. User response: '{user_response[:50]}...' for AI question: '{llm_question[:50]}...'")
-    analysis_result: Optional[ClarificationAnalysisResult] = gemini_service.analyze_user_clarification_llm(
-        original_query_text=original_query,
-        original_image_provided=image_provided,
-        reason_for_ambiguity=reason_ambiguity_initial,
-        llm_clarification_question=llm_question,
-        user_response_text=user_response,
-        conversation_history=main_conversation_history 
-    )
-    print(f"Tutor Logic: Received clarification analysis result: {analysis_result}")
-    st.session_state.debug_last_clarification_analysis = analysis_result # デバッグ用に保存
-    return analysis_result
+# analyze_user_clarification_logic は削除またはコメントアウト
+# def analyze_user_clarification_logic(user_response: str) -> Optional[ClarificationAnalysisResult]:
+#     """
+#     [この関数は新しいフローでは使用されません]
+#     ユーザーの明確化応答を分析し、曖昧さが解消されたかを判定する。
+#     ... (元のdocstring) ...
+#     """
+#     # ... (元の実装) ...
+#     pass # または関数全体を削除
 
 
 def generate_clarification_question_logic() -> Optional[str]:
@@ -404,3 +346,70 @@ def analyze_student_performance_logic() -> Optional[str]:
     )
     # print(f"Tutor Logic: Generated student performance analysis report: {analysis_report}")
     return analysis_report
+
+
+# ★新規追加: perform_guidance_planning_logic 関数★
+def perform_guidance_planning_logic() -> Optional[str]:
+    """
+    明確化されたリクエストと問題コンテキストに基づき、指導計画をLLMに生成させる。
+    結果はセッション状態に保存される。
+
+    必要なセッション状態:
+    - `clarified_request_text`: 明確化された（またはユーザーが最終的に提示した）リクエストテキスト。
+    - `current_problem_context`: 現在の問題コンテキスト。
+    - `messages` または `clarification_history`: 会話履歴（サマリー用）。
+
+    Returns:
+        Optional[str]: 生成された指導計画のテキスト。エラー時はエラーメッセージ文字列。
+                       Noneの場合はAPI呼び出し自体が失敗したことを示す。
+    """
+    clarified_request = st.session_state.get("clarified_request_text")
+    if not clarified_request:
+        # 通常、UIロジックで clarified_request_text が設定されてからこの関数が呼ばれるはず
+        # 例: ユーザーの明確化応答をそのまま clarified_request_text にセット
+        initial_analysis_res = st.session_state.get("initial_analysis_result")
+        if initial_analysis_res and initial_analysis_res.get("ambiguity") == "clear":
+            clarified_request = initial_analysis_res.get("summary", st.session_state.user_query_text)
+        else:
+            clarified_request = st.session_state.user_query_text # フォールバックとして元のクエリ
+
+    if not clarified_request:
+        print("Error in tutor_logic (perform_guidance_planning_logic): Clarified request is missing.")
+        return "指導計画を生成するためのリクエスト内容が不明です。"
+
+    current_problem_ctx: Optional[ProblemContext] = st.session_state.get("current_problem_context")
+    problem_context_summary_for_llm = _create_problem_context_summary(current_problem_ctx)
+
+    # 指導計画プロンプトには、ここまでの主要な会話履歴を渡す
+    # `clarification_history` があればそれも考慮するが、メインは `messages`
+    # 新しいフローでは `clarification_history` はあまり使われないかもしれない
+    conversation_history_for_plan: List[ChatMessage] = []
+    # if st.session_state.get("clarification_history"):
+    #     conversation_history_for_plan.extend(st.session_state.clarification_history)
+    # elif st.session_state.get("messages"): # clarification_history が空なら messages を使う
+    conversation_history_for_plan.extend(st.session_state.get("messages", []))
+
+
+    print(f"Tutor Logic: Performing guidance planning. Clarified Request: '{clarified_request[:50]}...', ProblemCtx: {problem_context_summary_for_llm[:50] if problem_context_summary_for_llm else 'None'}")
+
+    guidance_plan_text = gemini_service.plan_guidance_llm(
+        clarified_request=clarified_request,
+        problem_context_summary=problem_context_summary_for_llm,
+        conversation_history=conversation_history_for_plan # gemini_service側でサマリー化を期待
+    )
+
+    if guidance_plan_text is None:
+        # API呼び出し自体が失敗した場合 (gemini_service側でNoneが返るケース)
+        print("Error in tutor_logic (perform_guidance_planning_logic): plan_guidance_llm returned None.")
+        return "AIによる指導計画の生成に失敗しました（APIエラー）。" # エラーメッセージを返す
+
+    if "システムエラー:" in guidance_plan_text or "AIが指導計画を生成できませんでした" in guidance_plan_text:
+        # gemini_service側でエラー文字列が返された場合
+        print(f"Error in tutor_logic (perform_guidance_planning_logic): LLM returned error message: {guidance_plan_text}")
+        state_manager.store_guidance_plan(None) # エラーなのでプランは保存しない
+        return guidance_plan_text # エラーメッセージをそのまま返す
+
+    # 正常に計画が生成された場合
+    state_manager.store_guidance_plan(guidance_plan_text)
+    print(f"Tutor Logic: Guidance plan generated and stored (first 100 chars): {guidance_plan_text[:100]}")
+    return guidance_plan_text # 生成された計画を返す (UI表示用)

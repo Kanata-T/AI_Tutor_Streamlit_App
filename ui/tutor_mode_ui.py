@@ -11,9 +11,14 @@ from core import state_manager, tutor_logic
 from utils.image_processor import preprocess_uploaded_image
 from utils.image_processing_parts.base_image_utils import auto_orient_image_opencv, image_to_bytes
 from utils.demo_case_loader import get_available_demo_cases, load_demo_case_data # ★新規インポート
+from utils import config_loader # ★ config_loader をインポート ★
 
 # uiヘルパーのインポート
 from .display_helpers import display_analysis_result # 相対インポート
+
+APP_CONFIG = config_loader.get_config()
+LOGIC_CONFIG = APP_CONFIG.get("application_logic", {})
+MAX_CLARIFICATION_ATTEMPTS = LOGIC_CONFIG.get("max_clarification_attempts", 1) # デフォルト値 1
 
 def render_tutor_mode():
     """AIチューターモードのUIとロジックをレンダリングします。"""
@@ -442,62 +447,42 @@ def render_tutor_mode():
 
     # AIチューターモードの共通チャット入力
     if current_step_tutor_main_final in [state_manager.STEP_CLARIFICATION_NEEDED, state_manager.STEP_FOLLOW_UP_LOOP]:
+        # 「理解しました」ボタンの表示条件
         if current_step_tutor_main_final == state_manager.STEP_FOLLOW_UP_LOOP and \
            st.session_state.messages and st.session_state.messages[-1]["role"] == "assistant":
-            # 「理解しました」ボタンは、AIの応答後に表示
-            if st.button("✅ 理解しました / 要約へ", key="understood_main_btn_ui_module"): # キー変更
+            if st.button("✅ 理解しました / 要約へ", key="understood_main_btn_ui_module"):
                 state_manager.add_message("user", "（理解しました）")
                 state_manager.set_current_step(state_manager.STEP_SUMMARIZE)
                 st.rerun()
 
-        chat_disabled_tf_f = st.session_state.get("processing", False)
-        user_chat_input_tf_f = st.chat_input(
+        chat_disabled = st.session_state.get("processing", False)
+        user_chat_input = st.chat_input(
             "AIへの返答や追加質問など", 
-            disabled=chat_disabled_tf_f, 
-            key="main_tutor_chat_input_area_ui_module" # キー変更
+            disabled=chat_disabled, 
+            key="main_tutor_chat_input_area_ui_module"
         )
 
-        if user_chat_input_tf_f:
-            state_manager.add_message("user", user_chat_input_tf_f)
+        if user_chat_input:
+            state_manager.add_message("user", user_chat_input)
             
             if current_step_tutor_main_final == state_manager.STEP_CLARIFICATION_NEEDED:
-                state_manager.add_clarification_history_message("user", user_chat_input_tf_f)
-                state_manager.set_processing_status(True)
-                with st.spinner("AIがあなたの応答を分析中です..."):
-                    clar_res_f2 = tutor_logic.analyze_user_clarification_logic(user_chat_input_tf_f)
-                state_manager.set_processing_status(False)
-
-                if clar_res_f2:
-                    state_manager.add_message("system", {"type": "analysis_result", "data": dict(clar_res_f2), "title": "明確化応答の分析結果"})
-                    if "error" in clar_res_f2:
-                        state_manager.add_message("assistant", "応答の分析中に問題がありました。現在の理解で進めさせていただきます。")
-                        st.session_state.is_request_ambiguous = False
-                        state_manager.set_current_step(state_manager.STEP_SELECT_STYLE)
-                    else:
-                        state_manager.store_clarification_analysis(clar_res_f2) # 分析結果を保存
-                        if not st.session_state.is_request_ambiguous: # 曖昧さが解消された
-                            state_manager.add_message("assistant", clar_res_f2.get("ai_response_to_user","理解しました。解説のスタイルを選択してください。"))
-                            state_manager.set_current_step(state_manager.STEP_SELECT_STYLE)
-                        else: # まだ曖昧さが残っている
-                            state_manager.add_message("assistant", f"もう少し確認させてください: {clar_res_f2.get('remaining_issue', '不明な点が残っています。')}")
-                            # clarification_attempts をここでインクリメントしても良い（tutor_logic側でも制御可能）
-                else: # clar_res_f2 が None の場合など
-                    state_manager.add_message("system", "エラー(明確化応答分析): 分析結果がありませんでした。")
-                    state_manager.add_message("assistant", "応答の分析に問題がありました。現在の理解で進めさせていただきます。")
-                    st.session_state.is_request_ambiguous = False
-                    state_manager.set_current_step(state_manager.STEP_SELECT_STYLE)
+                # ★明確化応答の分析を完全にスキップし、ユーザー応答を clarified_request_text に直接セットして次のステップへ★
+                st.session_state.clarified_request_text = user_chat_input
+                st.session_state.is_request_ambiguous = False # 応答があった時点で曖昧さ解消とみなす
+                state_manager.add_clarification_history_message("user", user_chat_input)
+                state_manager.set_current_step(state_manager.STEP_PLAN_GUIDANCE)
                 st.rerun()
 
             elif current_step_tutor_main_final == state_manager.STEP_FOLLOW_UP_LOOP:
                 state_manager.set_processing_status(True)
                 with st.spinner("AIが応答準備中..."):
-                    followup_resp_f2 = tutor_logic.generate_followup_response_logic(user_chat_input_tf_f)
+                    followup_response = tutor_logic.generate_followup_response_logic(user_chat_input)
                 state_manager.set_processing_status(False)
                 
-                if followup_resp_f2 and "エラー" not in followup_resp_f2:
-                    state_manager.add_message("assistant", followup_resp_f2)
+                if followup_response and "エラー" not in followup_response:
+                    state_manager.add_message("assistant", followup_response)
                 else:
-                    err_msg_fu = followup_resp_f2 or "フォローアップ応答の生成に失敗しました。"
-                    state_manager.add_message("system", f"エラー(フォローアップ): {err_msg_fu}")
+                    error_msg_fu = followup_response or "フォローアップ応答の生成に失敗しました。"
+                    state_manager.add_message("system", f"エラー(フォローアップ): {error_msg_fu}")
                     state_manager.add_message("assistant", "申し訳ありません、応答の準備中に問題が発生しました。")
                 st.rerun()
