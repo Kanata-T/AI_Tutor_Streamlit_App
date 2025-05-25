@@ -1,14 +1,17 @@
 # utils/demo_case_loader.py
 import os
+import json  # ★ 追加
 from pathlib import Path
 from typing import List, Dict, Optional, Any, Tuple
 from PIL import Image # MIMEタイプ取得のため
 from io import BytesIO
+from core.type_definitions import ImageType  # ★ 追加
 
 DEMO_CASES_DIR = Path(__file__).parent.parent / "demo_cases"
 
 # 画像ファイルの一般的な拡張子
 IMAGE_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif')
+IMAGE_TYPES_FILENAME = "image_types.json"  # ★ 追加
 
 def get_available_demo_cases() -> List[str]:
     """demo_cases ディレクトリ内の question_id (ディレクトリ名) のリストを返す。"""
@@ -26,7 +29,7 @@ def load_demo_case_data(question_id: str) -> Optional[Dict[str, Any]]:
         - "question_text": Optional[str]
         - "style_text": Optional[str]
         - "understood_text": Optional[str]
-        - "images": List[Dict[str, Any]]  # [{"filename": str, "path": Path, "bytes": bytes, "mime_type": str}]
+        - "images": List[Dict[str, Any]]  # [{"filename": str, "path": Path, "bytes": bytes, "mime_type": str, "expected_image_type": Optional[ImageType]}]
         - "error": Optional[str] (if any error occurs)
     """
     case_dir = DEMO_CASES_DIR / question_id
@@ -57,37 +60,53 @@ def load_demo_case_data(question_id: str) -> Optional[Dict[str, Any]]:
     except Exception as e:
         return {"error": f"Error reading text files for case {question_id}: {e}"}
 
+    # ★ 画像種別メタデータの読み込み ★
+    expected_image_types_map: Dict[str, ImageType] = {}
+    image_types_file_path = case_dir / IMAGE_TYPES_FILENAME
+    if image_types_file_path.exists():
+        try:
+            with open(image_types_file_path, "r", encoding="utf-8") as f:
+                loaded_types_json = json.load(f)
+                for filename, type_str in loaded_types_json.items():
+                    try:
+                        expected_image_types_map[filename] = ImageType[type_str.upper()]
+                    except KeyError:
+                        print(f"Warning: Invalid image type string '{type_str}' for file '{filename}' in {image_types_file_path}. Skipping.")
+        except json.JSONDecodeError:
+            print(f"Warning: Could not decode JSON from {image_types_file_path}. Expected image types will not be loaded.")
+        except Exception as e:
+            print(f"Warning: Error reading {image_types_file_path}: {e}. Expected image types will not be loaded.")
+
     # 画像ファイルの読み込み
     try:
         for item in case_dir.iterdir():
             if item.is_file() and item.name.lower().endswith(IMAGE_EXTENSIONS):
-                # question_id を含まない元のファイル名で画像が保存されている場合も考慮
-                # ここでは、拡張子で画像ファイルかどうかを判断する
                 filename = item.name
                 file_path = item
                 try:
                     with open(file_path, "rb") as f_img:
                         img_bytes = f_img.read()
-                    
-                    # MIMEタイプを推測 (Pillowを使用)
                     pil_img_temp = Image.open(BytesIO(img_bytes))
                     mime_type = Image.MIME.get(pil_img_temp.format)
-                    if not mime_type: # PillowでMIMEが取れない場合、拡張子から簡易的に
+                    if not mime_type:
                         ext = filename.split('.')[-1].lower()
                         if ext == "jpg" or ext == "jpeg": mime_type = "image/jpeg"
                         elif ext == "png": mime_type = "image/png"
                         elif ext == "webp": mime_type = "image/webp"
-                        else: mime_type = "application/octet-stream" # 不明な場合
+                        else: mime_type = "application/octet-stream"
+
+                    # ★ 期待される画像種別を付与 ★
+                    expected_type = expected_image_types_map.get(filename)
 
                     data["images"].append({
                         "filename": filename,
                         "path": file_path,
                         "bytes": img_bytes,
-                        "mime_type": mime_type
+                        "mime_type": mime_type,
+                        "expected_image_type": expected_type  # None の場合もある
                     })
                 except Exception as e_img:
                     print(f"Warning: Could not load image {filename} for case {question_id}: {e_img}")
-                    # エラーがあっても他のファイルのロードは続ける
     except Exception as e:
         return {"error": f"Error listing or reading image files for case {question_id}: {e}"}
     
@@ -107,7 +126,7 @@ if __name__ == '__main__':
             print(f"  Style: {case_data.get('style_text')}")
             print(f"  Understood: {case_data.get('understood_text')}")
             for img_info in case_data.get("images", []):
-                print(f"  Image: {img_info['filename']} (MIME: {img_info['mime_type']}, Size: {len(img_info['bytes'])} bytes)")
+                print(f"  Image: {img_info['filename']} (MIME: {img_info['mime_type']}, Expected Type: {img_info.get('expected_image_type')})")
         elif case_data:
             print(f"Error loading case '{test_case_id}': {case_data['error']}")
     else:

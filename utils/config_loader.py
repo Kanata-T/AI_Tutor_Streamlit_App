@@ -5,7 +5,8 @@ import streamlit as st  # エラー表示用 (任意)
 
 # Prompt Template Keys (これはこのままでOK、gemini_service.py等から参照想定)
 PROMPT_KEY_SYSTEM: str = "system_prompt"
-PROMPT_KEY_EXTRACT_TEXT_FROM_IMAGE: str = "extract_text_from_image"
+# PROMPT_KEY_EXTRACT_TEXT_FROM_IMAGE: str = "extract_text_from_image" # 古いキーはコメントアウトまたは削除
+PROMPT_KEY_EXTRACT_TEXT_AND_TYPE_FROM_IMAGE: str = "extract_text_and_type_from_image" # ★新規追加★
 PROMPT_KEY_ANALYZE_QUERY_WITH_OCR: str = "analyze_query_with_ocr"
 PROMPT_KEY_ANALYZE_CLARIFICATION_RESPONSE: str = "analyze_clarification_response"
 PROMPT_KEY_CLARIFICATION_QUESTION: str = "clarification_question"
@@ -29,7 +30,8 @@ def get_config() -> Dict[str, Any]: # 型ヒントを Dict[str, Any] に統一
         try:
             if not CONFIG_PATH.is_file(): # ファイル存在チェックを先に行う
                 print(f"CRITICAL ERROR: config.yaml not found at {CONFIG_PATH}")
-                st.error(f"システム設定エラー: config.yamlが見つかりません ({CONFIG_PATH})。")
+                if 'st' in globals() and hasattr(st, 'error'):
+                    st.error(f"システム設定エラー: config.yamlが見つかりません ({CONFIG_PATH})。")
                 _config_cache = {}
                 return _config_cache # ここでリターン
 
@@ -38,18 +40,18 @@ def get_config() -> Dict[str, Any]: # 型ヒントを Dict[str, Any] に統一
             
             if not isinstance(_config_cache, dict):
                 print(f"CRITICAL ERROR: config.yaml is not a valid YAML dictionary.")
-                # st.error はUIスレッド以外で呼ばれると問題が起きる可能性があるため、基本はprintでログ出力に留めるのが安全
-                # Streamlitのメインスレッドでこの関数が呼ばれることが保証されているならst.errorでも可
-                # ここでは、st.errorを残しつつも、printを併用
-                st.error("システム設定エラー: config.yamlの形式が正しくありません。")
+                if 'st' in globals() and hasattr(st, 'error'):
+                    st.error("システム設定エラー: config.yamlの形式が正しくありません。")
                 _config_cache = {}
         except yaml.YAMLError as e:
             print(f"CRITICAL ERROR: Error parsing config.yaml: {e}")
-            st.error(f"システム設定エラー: config.yamlの解析に失敗しました: {e}")
+            if 'st' in globals() and hasattr(st, 'error'):
+                st.error(f"システム設定エラー: config.yamlの解析に失敗しました: {e}")
             _config_cache = {}
         except Exception as e: # FileNotFoundError もここでキャッチされる
             print(f"CRITICAL ERROR: An unexpected error occurred while loading config.yaml: {e}")
-            st.error(f"システム設定エラー: config.yamlの読み込み中に予期せぬエラーが発生しました: {e}")
+            if 'st' in globals() and hasattr(st, 'error'):
+                st.error(f"システム設定エラー: config.yamlの読み込み中に予期せぬエラーが発生しました: {e}")
             _config_cache = {}
     return _config_cache if _config_cache is not None else {} # Noneチェックを追加
 
@@ -144,11 +146,19 @@ if __name__ == '__main__':
         print(f"Clarification Question Prompt File: {clarification_prompt_name}.md")
     else:
         print(f"Clarification Question Prompt File: Not configured (template_key: {PROMPT_KEY_CLARIFICATION_QUESTION})")
-    
-    print("\n--- Testing get_image_processing_defaults_for_app (if used) ---")
-    # img_proc_defaults = get_image_processing_defaults_for_app()
-    # print(f"CV Params from defaults function: {img_proc_defaults.get('fixed_cv_params')}")
-    # print(f"Other Params from defaults function: {img_proc_defaults.get('fixed_other_params')}")
+
+    # ★ 新しいプロンプトキーのテストを追加 ★
+    extract_type_prompt_name = get_prompt_template_name(PROMPT_KEY_EXTRACT_TEXT_AND_TYPE_FROM_IMAGE)
+    if extract_type_prompt_name:
+        print(f"Extract Text and Type Prompt File: {extract_type_prompt_name}.md")
+    else:
+        print(f"Extract Text and Type Prompt File: Not configured (template_key: {PROMPT_KEY_EXTRACT_TEXT_AND_TYPE_FROM_IMAGE})")
+
+    analyze_ocr_prompt_name = get_prompt_template_name(PROMPT_KEY_ANALYZE_QUERY_WITH_OCR)
+    if analyze_ocr_prompt_name:
+        print(f"Analyze Query with OCR Prompt File: {analyze_ocr_prompt_name}.md")
+    else:
+        print(f"Analyze Query with OCR Prompt File: Not configured (template_key: {PROMPT_KEY_ANALYZE_QUERY_WITH_OCR})")
 
     print("\n--- Testing direct access to image processing config from get_config() ---")
     main_config = get_config()

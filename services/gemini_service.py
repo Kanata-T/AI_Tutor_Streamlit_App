@@ -7,7 +7,7 @@ from pathlib import Path
 from utils import config_loader  # ★ config_loaderをインポート ★
 # core から型定義をインポート (循環依存に注意しつつ、今回は型定義のみなので許容範囲とする)
 # 本来は services と core が依存しない共通の型定義モジュールが良い
-from core.type_definitions import ChatMessage, UploadedFileData, InitialAnalysisResult, ClarificationAnalysisResult
+from core.type_definitions import ChatMessage, UploadedFileData, InitialAnalysisResult, ClarificationAnalysisResult, ProcessedImageInfo, ImageType
 
 # --- モデル名とプロンプト名をconfigから取得 ---
 TEXT_MODEL_NAME = config_loader.get_text_model_name()
@@ -176,87 +176,106 @@ def call_gemini_api(
         print(f"Error calling Gemini API (model: {final_model_name}): {e}")
         return None # エラー時はNoneを返す (呼び出し元で処理)
 
-def extract_text_from_image_llm(
-        image_data_list: List[Dict[str, Any]]
-    ) -> Optional[str]:
+def extract_text_and_type_from_image_llm(
+        image_data_list: List[Dict[str, Any]]  # 入力は [{"data": bytes, "mime_type": str, "filename": str}, ...]
+    ) -> List[ProcessedImageInfo]:
     """
-    複数画像データからテキストを抽出する (OCR)。Visionモデルを使用。
-    各画像ごとにOCRを実行し、結果を結合して返す。
-    プロンプト: "extract_text_from_image"
+    複数画像データからテキストを抽出し、画像種別を判別する。Visionモデルを使用。
+    各画像ごとに処理を実行し、ProcessedImageInfoのリストを返す。
+    プロンプト: "extract_text_and_type_from_image" (config_loader経由で取得)
     """
-    prompt_text_from_file = load_prompt_template(config_loader.PROMPT_KEY_EXTRACT_TEXT_FROM_IMAGE)
-    if prompt_text_from_file is None:
-        print(f"Error: OCR prompt template {config_loader.PROMPT_KEY_EXTRACT_TEXT_FROM_IMAGE} could not be loaded. OCR will fail.")
-        return None 
-    prompt_text = prompt_text_from_file
+    prompt_template_text = load_prompt_template(config_loader.PROMPT_KEY_EXTRACT_TEXT_AND_TYPE_FROM_IMAGE)
+    if prompt_template_text is None:
+        error_msg = f"Error: OCR and Typing prompt template '{config_loader.PROMPT_KEY_EXTRACT_TEXT_AND_TYPE_FROM_IMAGE}' could not be loaded. OCR and typing will fail."
+        print(error_msg)
+        return []
 
-    all_ocr_texts: List[str] = [] # 各画像のOCR結果を格納するリスト
+    processed_results: List[ProcessedImageInfo] = []
 
     if not image_data_list:
-        print("Warning (extract_text_from_image_llm): No images provided for OCR.")
-        return None
+        print("Warning (extract_text_and_type_from_image_llm): No images provided.")
+        return []
 
-    for idx, image_data in enumerate(image_data_list):
-        if not isinstance(image_data, dict) or 'mime_type' not in image_data or 'data' not in image_data:
-            print(f"Warning (extract_text_from_image_llm): Invalid image data format for image at index {idx}. Skipping.")
+    for idx, image_info in enumerate(image_data_list):
+        original_filename = image_info.get("filename", f"image_{idx+1}")
+        mime_type = image_info.get("mime_type")
+        image_bytes = image_info.get("data")
+
+        if not mime_type or not image_bytes:
+            print(f"Warning (extract_text_and_type_from_image_llm): Invalid image data for '{original_filename}'. Skipping.")
+            processed_results.append({
+                "original_filename": original_filename,
+                "image_type": ImageType.OTHER,
+                "mime_type": mime_type or "application/octet-stream",
+                "input_bytes": image_bytes or b"",
+                "ocr_text": "[画像データエラーのため処理不可]",
+            })
             continue
 
-        # Vision APIは通常、[image, text_prompt] のようなコンテンツリストを期待する
         contents_for_api = [
-            {'mime_type': image_data['mime_type'], 'data': image_data['data']},
-            prompt_text # 各画像に同じOCR指示プロンプトを適用
+            {'mime_type': mime_type, 'data': image_bytes},
+            prompt_template_text
         ]
-        
-        print(f"Attempting OCR for image {idx+1}/{len(image_data_list)} (MIME: {image_data['mime_type']})")
-        single_ocr_result_text = call_gemini_api(
-            contents_for_api,
-            model_name=VISION_MODEL_NAME, 
-            is_json_output=False
-        )
-        
-        if single_ocr_result_text and isinstance(single_ocr_result_text, str):
-            all_ocr_texts.append(single_ocr_result_text.strip())
-            print(f"OCR for image {idx+1} successful (first 50 chars): '{single_ocr_result_text.strip()[:50]}...'")
-        else:
-            print(f"OCR attempt with model {VISION_MODEL_NAME} failed or returned unexpected format for image {idx+1}.")
-            # 1つの画像のOCRに失敗しても、他の画像の処理は続ける
-            all_ocr_texts.append(f"[画像 {idx+1} ({image_data.get('filename', 'N/A')}) のOCR抽出失敗]") # エラー情報を含める
 
-    if not all_ocr_texts:
-        print("No OCR text could be extracted from any of the provided images.")
-        return None
-    
-    # 全画像のOCR結果を結合（例: 改行区切り）
-    # ファイル名などの情報も付加して結合すると、後で区別しやすい
-    combined_ocr_text = ""
-    for i, ocr_text in enumerate(all_ocr_texts):
-        filename_info = image_data_list[i].get('filename', f'画像{i+1}') # tutor_mode_uiでfilenameも渡すようにすると良い
-        combined_ocr_text += f"--- 画像「{filename_info}」の抽出テキスト ---\n{ocr_text}\n\n"
-        
-    return combined_ocr_text.strip()
+        print(f"Attempting OCR and Type Classification for image '{original_filename}' (MIME: {mime_type})")
+        api_response = call_gemini_api(
+            contents_for_api,
+            model_name=VISION_MODEL_NAME,
+            is_json_output=True
+        )
+
+        extracted_text_result = None
+        image_type_result = ImageType.OTHER
+
+        if isinstance(api_response, dict):
+            if "error" in api_response:
+                print(f"API call for '{original_filename}' returned an error in JSON: {api_response['error']}")
+                extracted_text_result = f"[APIエラーのため抽出失敗: {api_response['error']}]"
+            else:
+                extracted_text_result = api_response.get("extracted_text", "[テキスト抽出キーなし]")
+                type_str_from_llm = api_response.get("image_type", "OTHER")
+                try:
+                    image_type_result = ImageType[type_str_from_llm.upper()]
+                except KeyError:
+                    print(f"Warning: LLM returned an invalid image_type '{type_str_from_llm}' for '{original_filename}'. Defaulting to OTHER.")
+                    image_type_result = ImageType.OTHER
+                print(f"OCR & Type for '{original_filename}' successful. Type: {image_type_result}, Text (first 50): '{str(extracted_text_result)[:50]}...'")
+        else:
+            error_detail = str(api_response) if api_response else "None"
+            print(f"OCR & Type attempt for '{original_filename}' with model {VISION_MODEL_NAME} failed or returned non-JSON: {error_detail}")
+            extracted_text_result = f"[LLM応答形式エラーのため抽出失敗: {error_detail[:100]}]"
+
+        processed_results.append({
+            "original_filename": original_filename,
+            "image_type": image_type_result,
+            "mime_type": mime_type,
+            "input_bytes": image_bytes,
+            "ocr_text": extracted_text_result,
+        })
+
+    return processed_results
 
 
 def analyze_initial_input_with_ocr(
         query_text: str,
-        ocr_text_from_image: Optional[str] = None,
+        combined_ocr_and_type_info: Optional[str] = None,
         image_data_list_for_vision: Optional[List[Dict[str, Any]]] = None
     ) -> Optional[InitialAnalysisResult]:
     """
-    ユーザーのテキストクエリとOCR結果（あれば）を分析し、曖昧さなどを判定する。
-    複数画像（image_data_list_for_vision）が与えられた場合は、プロンプトやAPIで活用できる設計に拡張。
+    ユーザーのテキストクエリと、OCRおよび種別判別された画像情報を分析する。
     プロンプト: "analyze_query_with_ocr" (JSON出力を期待)
-    期待するプレースホルダ: {query_text}, {ocr_text_from_image}
+    期待するプレースホルダ: {query_text}, {combined_ocr_and_type_info}
     """
     prompt_template = load_prompt_template(config_loader.PROMPT_KEY_ANALYZE_QUERY_WITH_OCR)
     if prompt_template is None:
         return {"error": f"システムエラー: 分析プロンプト '{config_loader.PROMPT_KEY_ANALYZE_QUERY_WITH_OCR}' を読み込めませんでした。"} # type: ignore
 
-    ocr_text_to_pass = ocr_text_from_image if ocr_text_from_image else "なし"
+    ocr_info_to_pass = combined_ocr_and_type_info if combined_ocr_and_type_info else "なし"
 
     try:
         prompt = prompt_template.format(
             query_text=query_text,
-            ocr_text_from_image=ocr_text_to_pass
+            combined_ocr_and_type_info=ocr_info_to_pass
         )
     except KeyError as e:
         template_key_name = config_loader.PROMPT_KEY_ANALYZE_QUERY_WITH_OCR
@@ -264,21 +283,20 @@ def analyze_initial_input_with_ocr(
         print(f"KeyError during prompt formatting for {template_key_name}: Missing key {e}")
         return {"error": error_message} # type: ignore
 
-    # 複数画像をVisionモデルに渡す場合の拡張（現状は未使用、今後の拡張用）
-    if image_data_list_for_vision and len(image_data_list_for_vision) > 0:
-        # 例: [prompt, image1, prompt, image2, ...] のような構造でAPIに渡すことも可能
-        # ただし現状のプロンプト設計・API仕様に応じて調整が必要
-        pass
-
     result = call_gemini_api(
         prompt,
         model_name=TEXT_MODEL_NAME,
         is_json_output=True
     )
+
     if isinstance(result, dict):
-        return result # type: ignore 
-    print(f"Warning: analyze_initial_input_with_ocr expected JSON but received non-dict: {result}")
-    return None
+        return result # type: ignore
+    elif result is None:
+        print(f"Error: analyze_initial_input_with_ocr API call failed for prompt key {config_loader.PROMPT_KEY_ANALYZE_QUERY_WITH_OCR}")
+        return {"error": "AIによる初期分析のAPI呼び出しに失敗しました。"} # type: ignore
+    else:
+        print(f"Warning: analyze_initial_input_with_ocr expected JSON but received non-dict: {result}")
+        return {"error": "AIによる初期分析結果が予期しない形式でした。", "raw_response": str(result)} # type: ignore
 
 def analyze_user_clarification_llm(
         original_query_text: str,

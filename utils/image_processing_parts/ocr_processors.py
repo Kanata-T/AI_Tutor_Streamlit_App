@@ -15,9 +15,9 @@ except ImportError:
 
 def get_text_orientation_with_tesseract(img_pil: Image.Image, lang: str = 'eng+jpn') -> int:
     """
-    Pytesseractを使用して画像のテキストの向き（0, 90, 180, 270度）を推定する。
+    Pytesseractを使用して画像のテキストの向き（0, 90, 270度）を推定する。
     最も多くの文字が検出された向きを返す。
-    戻り値: 最適と思われる回転角度 (0, 90, 180, 270)。エラー時は0を返す。
+    戻り値: 最適と思われる回転角度 (0, 90, 270)。エラー時は0を返す。180度は評価しない。
     """
     if not PYTESSERACT_AVAILABLE:
         print("[ocr_processors] Pytesseract not available, cannot determine text orientation via OCR.")
@@ -26,29 +26,31 @@ def get_text_orientation_with_tesseract(img_pil: Image.Image, lang: str = 'eng+j
     best_angle = 0
     max_chars = -1
 
-    print("[ocr_processors] Determining text orientation using Tesseract OCR (0, 90, 180, 270 degrees)...")
-    for angle in [0, 90, 180, 270]:
+    print("[ocr_processors] Determining text orientation using Tesseract OCR (0, 90, 270 degrees)...")
+    angles_to_check = [0, 90, 270]
+
+    for angle in angles_to_check:
         try:
             if angle == 0:
                 img_rotated = img_pil.copy()
             else:
-                img_rotated = img_pil.rotate(angle, expand=True)
-            
-            text = pytesseract.image_to_string(img_rotated, lang=lang, timeout=5) 
+                img_rotated = img_pil.rotate(angle, expand=True, fillcolor='white')
+
+            text = pytesseract.image_to_string(img_rotated, lang=lang, timeout=5)
             num_chars = len(text.strip())
             print(f"[ocr_processors] Angle {angle}: Detected {num_chars} characters.")
 
             if num_chars > max_chars:
                 max_chars = num_chars
                 best_angle = angle
-        except pytesseract.TesseractError as e: # type: ignore # PytesseractError が未定義と出る場合
+        except pytesseract.TesseractError as e:
             print(f"[ocr_processors] Tesseract OCR error at angle {angle}: {e}")
-        except RuntimeError as e: 
+        except RuntimeError as e:
             print(f"[ocr_processors] Tesseract runtime error (possibly timeout) at angle {angle}: {e}")
         except Exception as e:
             print(f"[ocr_processors] Unexpected error during OCR at angle {angle}: {e}")
-            
-    print(f"[ocr_processors] Best OCR angle determined: {best_angle} degrees with {max_chars} characters.")
+
+    print(f"[ocr_processors] Best OCR angle determined: {best_angle} degrees with {max_chars} characters (180 deg excluded).")
     return best_angle
 
 def trim_image_by_ocr_text_bounds(

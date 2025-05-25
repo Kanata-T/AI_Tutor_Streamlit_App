@@ -137,8 +137,9 @@ def render_tutor_mode():
                 # (オプション) ロードされた画像の簡易プレビューやリスト表示
                 for idx, img_info in enumerate(st.session_state.demo_case_loaded_images):
                     st.caption(f"  - {img_info['filename']}")
-                
-                # 手動で上書きアップロードする場合のUI
+                # 画像種別選択UIは不要になったため削除・コメントアウト
+                # 例: st.selectbox("画像種別を選択", ...) など
+                # 期待される画像種別 (expected_image_type) のUI表示も現時点では行わない
                 uploaded_files_tf_f_manual = st.file_uploader(
                     "新しい画像をアップロード (デモ画像を全て上書き):", 
                     type=["png","jpg","jpeg","webp","gif","bmp"], 

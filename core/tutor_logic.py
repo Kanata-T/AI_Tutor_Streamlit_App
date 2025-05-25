@@ -3,52 +3,88 @@ import streamlit as st # st.session_state にアクセスするために必要
 from typing import Dict, Any, Optional, List
 from services import gemini_service # services/__init__.py 経由でインポート
 from . import state_manager # 同じディレクトリの state_manager をインポート
-from .type_definitions import ChatMessage, UploadedFileData, InitialAnalysisResult, ClarificationAnalysisResult # 型定義をインポート
+from .type_definitions import ChatMessage, UploadedFileData, InitialAnalysisResult, ClarificationAnalysisResult, ProcessedImageInfo, ImageType # 型定義をインポート
 
 def perform_initial_analysis_logic() -> Optional[InitialAnalysisResult]:
     """
     ユーザーの初期入力 (テキストクエリ、複数画像) に基づいて初期分析を実行する。
+    画像がある場合は、OCRと画像種別判別を行い、その情報を初期分析プロンプトに含める。
     """
     query_text: str = st.session_state.get("user_query_text", "")
-    # ★ st.session_state.uploaded_file_data は画像のリストであることを期待
-    image_data_list: Optional[List[Dict[str, Any]]] = st.session_state.get("uploaded_file_data", None)
+    raw_image_data_list: Optional[List[Dict[str, Any]]] = st.session_state.get("uploaded_file_data", None)
 
-    if not query_text and not image_data_list:
+    if not query_text and not raw_image_data_list:
         print("Error in tutor_logic: No query text or image data for analysis.")
         return {"error": "質問内容のテキスト入力または画像のアップロードのいずれかを行ってください。"}
 
-    extracted_ocr_text: Optional[str] = None
-    if image_data_list and len(image_data_list) > 0:
-        print(f"Tutor Logic: Performing OCR for {len(image_data_list)} image(s).")
-        # ★★★ 修正点: gemini_service.extract_text_from_image_llm に画像リストを渡す ★★★
-        extracted_ocr_text = gemini_service.extract_text_from_image_llm(image_data_list) # リストを渡す
-        
-        if extracted_ocr_text is None:
-            print("Warning in tutor_logic: OCR failed or returned no text for all images.")
-            # エラーメッセージを少し具体的に
-            return {"error": "アップロードされた画像から文字を抽出できませんでした。いくつかの画像で問題があった可能性があります。"}
-        print(f"Tutor Logic: Combined OCR Result (first 100 chars): '{extracted_ocr_text[:100]}...'")
-    
-    print(f"Tutor Logic: Calling analysis with OCR. Query: '{query_text[:50]}...', OCR: '{str(extracted_ocr_text)[:50] if extracted_ocr_text else 'No OCR'}'")
-    
-    # ★★★ 検討点: analyze_initial_input_with_ocr にも画像リストを渡すか ★★★
-    # 現状の analyze_initial_input_with_ocr は ocr_text_from_image のみを受け取っている。
-    # もしVisionモデルで画像自体も分析に使うなら、image_data_list を渡すようにインターフェース変更が必要。
-    # 今回はまずOCRテキストのみで分析を進める前提とする。
+    combined_ocr_and_type_info_for_prompt: Optional[str] = None
+    st.session_state.processed_image_details_list = [] # 初期化
+
+    if raw_image_data_list and len(raw_image_data_list) > 0:
+        print(f"Tutor Logic: Performing OCR and Type Classification for {len(raw_image_data_list)} image(s).")
+        processed_image_info_list: List[ProcessedImageInfo] = gemini_service.extract_text_and_type_from_image_llm(raw_image_data_list)
+        st.session_state.processed_image_details_list = processed_image_info_list
+
+        if not processed_image_info_list:
+            print("Warning in tutor_logic: OCR and Type Classification returned no results.")
+            return {"error": "アップロードされた画像から情報を抽出できませんでした。"}
+
+        ocr_texts_for_prompt_parts = []
+        has_successful_ocr = False # 初期値は False
+        for proc_info in processed_image_info_list:
+            filename = proc_info.get("original_filename", "不明なファイル")
+            img_type_str = str(proc_info.get("image_type", ImageType.OTHER))
+            ocr_text_single = proc_info.get("ocr_text", "[テキスト抽出なし]") # デフォルトを明示
+
+            ocr_text_display = ocr_text_single # 表示用はそのまま
+
+            # 成功したOCRかどうかを判定するフラグ
+            current_ocr_is_successful = False
+            if ocr_text_single: # まずNoneや空文字列でないこと
+                # エラーを示す典型的な文字列や、実質的に内容がない文字列を含まない場合に成功とみなす
+                error_indicators = [
+                    "[エラーのため",
+                    "[画像データエラー",
+                    "[テキスト抽出なし]",
+                    "[テキスト抽出キーなし]",
+                    "[APIエラーのため抽出失敗",
+                    "[LLM応答形式エラーのため抽出失敗"
+                ]
+                if not any(indicator in ocr_text_single for indicator in error_indicators):
+                    if len(ocr_text_single.strip()) > 0:
+                        current_ocr_is_successful = True
+            if current_ocr_is_successful:
+                has_successful_ocr = True # 一つでも成功があればフラグを立てる
+
+            ocr_texts_for_prompt_parts.append(
+                f"--- 画像「{filename}」(種別: {img_type_str}) の抽出テキスト ---\n{ocr_text_display}"
+            )
+        if not has_successful_ocr:
+            print("Warning in tutor_logic: No successful OCR results from any image.")
+            # 必要に応じてここで return {"error": "全ての画像から有効なテキストを抽出できませんでした。"} なども可
+            # combined_ocr_and_type_info_for_prompt = "なし" はこの時点ではセットしない
+
+        if ocr_texts_for_prompt_parts:
+            combined_ocr_and_type_info_for_prompt = "\n\n".join(ocr_texts_for_prompt_parts)
+            print(f"Tutor Logic: Combined OCR & Type Info (first 200 chars for prompt): '{combined_ocr_and_type_info_for_prompt[:200]}...'")
+        else:
+            print("Warning in tutor_logic: No OCR parts to combine, though images were processed. Setting combined info to 'なし'.")
+            combined_ocr_and_type_info_for_prompt = "なし"
+
+    analysis_input_ocr_text = combined_ocr_and_type_info_for_prompt
+    print(f"Tutor Logic: Calling initial analysis. Query: '{query_text[:50]}...', Combined OCR/Type Info: '{str(analysis_input_ocr_text)[:50] if analysis_input_ocr_text else 'No OCR/Type Info'}'")
     analysis_result: Optional[InitialAnalysisResult] = gemini_service.analyze_initial_input_with_ocr(
         query_text=query_text,
-        ocr_text_from_image=extracted_ocr_text
-        # image_data_list_for_vision=image_data_list # ★将来的に追加検討★
+        combined_ocr_and_type_info=analysis_input_ocr_text
     )
     print(f"Tutor Logic: Received final analysis result from LLM: {analysis_result}")
 
     if analysis_result is None:
-        return {"error": "AIによる質問の分析処理中に予期せぬエラーが発生しました。"}
-    if "error" in analysis_result: # type: ignore
-        return analysis_result # type: ignore
-    if extracted_ocr_text:
-         analysis_result["ocr_text_from_extraction"] = extracted_ocr_text # type: ignore
-
+        return {"error": "AIによる質問の分析処理中に予期せぬエラーが発生しました（API応答なし）。"}
+    if not isinstance(analysis_result, dict):
+        return {"error": f"AIによる分析結果が予期しない形式です: {type(analysis_result)}"}
+    if "error" in analysis_result:
+        return analysis_result
     return analysis_result
 
 
@@ -141,7 +177,7 @@ def generate_clarification_question_logic() -> Optional[str]:
         print("Error in tutor_logic: Initial analysis result not found for generating clarification question.")
         return "明確化質問を生成するための元の質問の分析情報が見つかりません。"
         
-    reason_ambiguity: str = initial_analysis.get("reason_for_ambiguity", "（具体的な曖昧性の理由は分析されていませんが、追加情報が必要です）")
+    reason_ambiguity: str = initial_analysis.get("reason_for_ambiguity", "（追加情報が必要です）")
     image_provided: bool = st.session_state.get("uploaded_file_data") is not None
     main_conversation_history: List[ChatMessage] = st.session_state.get("messages", [])
 
@@ -163,25 +199,33 @@ def generate_clarification_question_logic() -> Optional[str]:
 def generate_explanation_logic() -> Optional[str]:
     """ユーザーのリクエストと選択されたスタイルに基づき、LLMに解説文を生成させる。"""
     clarified_request = st.session_state.get("clarified_request_text")
-    if not clarified_request and st.session_state.get("initial_analysis_result"):
-        initial_res = st.session_state.initial_analysis_result
-        clarified_request = initial_res.get("summary", st.session_state.user_query_text)
+    initial_res_expl: Optional[InitialAnalysisResult] = st.session_state.get("initial_analysis_result")
+    if not clarified_request and initial_res_expl:
+        clarified_request = initial_res_expl.get("summary", st.session_state.user_query_text)
     elif not clarified_request:
          clarified_request = st.session_state.get("user_query_text", "不明なリクエスト")
 
     request_category = "不明"
-    if st.session_state.get("initial_analysis_result"):
-        request_category = st.session_state.initial_analysis_result.get("request_category", "不明")
+    if initial_res_expl:
+        request_category = initial_res_expl.get("request_category", "不明")
     
     explanation_style = st.session_state.get("selected_explanation_style", "detailed")
     
-    relevant_context_ocr = None
-    if st.session_state.get("initial_analysis_result"):
-        initial_res_for_ocr = st.session_state.initial_analysis_result
-        # ocr_text_from_extraction は perform_initial_analysis_logic で追加されるカスタムキー
-        relevant_context_ocr = initial_res_for_ocr.get("ocr_text_from_extraction") 
-        if not relevant_context_ocr:
-            relevant_context_ocr = initial_res_for_ocr.get("ocr_text") # プロンプトからの直接的なocr_textキーも考慮
+    relevant_context_ocr: Optional[str] = None
+    processed_images: Optional[List[ProcessedImageInfo]] = st.session_state.get("processed_image_details_list")
+    if processed_images:
+        context_parts = []
+        for proc_info in processed_images:
+            filename = proc_info.get("original_filename", "不明なファイル")
+            img_type_str = str(proc_info.get("image_type", ImageType.OTHER))
+            ocr_text_single = proc_info.get("ocr_text", "[テキスト抽出なし]")
+            context_parts.append(
+                f"--- 画像「{filename}」(種別: {img_type_str}) の抽出テキスト ---\n{ocr_text_single}"
+            )
+        if context_parts:
+            relevant_context_ocr = "\n\n".join(context_parts)
+    if not relevant_context_ocr and initial_res_expl:
+        relevant_context_ocr = initial_res_expl.get("ocr_text_from_extraction_combined")
 
     conversation_history_for_llm: List[ChatMessage] = st.session_state.get("messages", [])
 

@@ -8,7 +8,7 @@ llm_models:
 # Prompt File Names (promptsディレクトリ内のファイル名、拡張子なし)
 prompt_templates:
   system_prompt: "system_prompt"
-  extract_text_from_image: "extract_text_from_image"   # 画像からのテキスト抽出用
+  extract_text_and_type_from_image: "extract_text_and_type_from_image"   # 画像からのテキスト抽出用
   analyze_query_with_ocr: "analyze_query_with_ocr"     # OCRテキストを用いた初期分析用
   clarification_question: "clarification_question"     # 生徒への明確化質問生成用
   analyze_clarification_response: "analyze_clarification_response" # 明確化回答分析用
