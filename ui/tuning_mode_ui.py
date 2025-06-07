@@ -444,13 +444,47 @@ def render_tuning_mode():
         st.session_state.last_processing_result_tuning = processing_result
         if processing_result and "error" not in processing_result:
             st.session_state.tuning_current_debug_images = processing_result.get("debug_images", [])
+            
+            # OCR処理結果をデバッグ用に保存（チューニングモード）
+            # 画像処理後にOCR処理を実行してテキスト抽出結果を保存
+            if st.session_state.tuning_raw_image_data:
+                try:
+                    # 処理済み画像データを使用してOCR実行
+                    ocr_image_data = processing_result.get("ocr_input_image", {}).get("data")
+                    if ocr_image_data:
+                        # OCR処理用の画像データリストを作成
+                        raw_image_data_for_ocr = [{
+                            "data": ocr_image_data,
+                            "mime_type": processing_result.get("ocr_input_image", {}).get("mime_type", "image/png"),
+                            "filename": f"tuning_image_{st.session_state.get('tuning_raw_image_mime_type', 'unknown')}"
+                        }]
+                        
+                        # OCR処理を実行
+                        from services import gemini_service
+                        ocr_results = gemini_service.extract_text_and_type_from_image_llm(raw_image_data_for_ocr)
+                        
+                        if ocr_results:
+                            st.session_state.tuning_last_ocr_results = ocr_results
+                            print(f"[TuningModeUI] OCR処理完了。{len(ocr_results)}件の結果を保存しました。")
+                        else:
+                            st.session_state.tuning_last_ocr_results = []
+                            print("[TuningModeUI] OCR処理は実行されましたが、結果が空でした。")
+                    else:
+                        print("[TuningModeUI] OCR用画像データが見つかりませんでした。")
+                        st.session_state.tuning_last_ocr_results = []
+                except Exception as e:
+                    print(f"[TuningModeUI] OCR処理中にエラーが発生しました: {e}")
+                    st.session_state.tuning_last_ocr_results = []
+            
             print("[TuningModeUI] 画像処理完了。")
         elif processing_result and "error" in processing_result:
             st.error(f"画像処理エラー (チューニング): {processing_result['error']}")
             st.session_state.tuning_current_debug_images = processing_result.get("debug_images", [])
+            st.session_state.tuning_last_ocr_results = []  # エラー時はOCR結果をクリア
             print(f"[TuningModeUI] 画像処理エラー: {processing_result['error']}")
         else:
             st.error("画像処理で予期せぬエラー (チューニング)。結果返されず。")
             st.session_state.tuning_current_debug_images = []
+            st.session_state.tuning_last_ocr_results = []  # エラー時はOCR結果をクリア
             print("[TuningModeUI] 画像処理で予期せぬエラー（結果がNone）。")
         st.rerun()

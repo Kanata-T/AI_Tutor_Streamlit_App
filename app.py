@@ -172,6 +172,14 @@ with st.sidebar:
             key="show_img_debug_tutor_cb"
         )
         st.session_state.show_img_debug_in_tutor_mode = show_debug_tutor
+        
+        # OCR結果デバッグ表示チェックボックス
+        show_ocr_debug = st.checkbox(
+            "OCR結果詳細表示 (文字起こし結果)", 
+            value=st.session_state.get("show_ocr_debug_in_tutor_mode", False),
+            key="show_ocr_debug_tutor_cb"
+        )
+        st.session_state.show_ocr_debug_in_tutor_mode = show_ocr_debug
 
         if st.session_state.show_img_debug_in_tutor_mode and \
            st.session_state.get("last_debug_images_tutor_run_final_v3"): # このキー名は tutor_mode_ui.py で設定されるもの
@@ -181,6 +189,66 @@ with st.sidebar:
                     title_prefix="固定パラメータでの"
                 )
         
+        # OCR結果詳細表示
+        if st.session_state.show_ocr_debug_in_tutor_mode:
+            with st.expander("OCR結果詳細 (文字起こし)", expanded=False):
+                # 最新のOCR結果を表示
+                if st.session_state.get("processed_image_details_list"):
+                    st.subheader("🔍 最新のOCR処理結果")
+                    for idx, img_info in enumerate(st.session_state.processed_image_details_list):
+                        filename = img_info.get("original_filename", f"画像_{idx+1}")
+                        img_type = img_info.get("image_type", "不明")
+                        ocr_text = img_info.get("ocr_text", "")
+                        
+                        st.write(f"**📄 {filename}** (種別: {img_type})")
+                        
+                        # OCR結果の詳細情報
+                        if ocr_text:
+                            # 文字数と行数の統計
+                            char_count = len(ocr_text)
+                            line_count = len(ocr_text.split('\n'))
+                            word_count = len(ocr_text.split())
+                            
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric("文字数", char_count)
+                            with col2:
+                                st.metric("行数", line_count)
+                            with col3:
+                                st.metric("単語数", word_count)
+                            
+                            # OCRテキストの表示
+                            st.text_area(
+                                f"抽出テキスト ({filename})",
+                                value=ocr_text,
+                                height=200,
+                                disabled=True,
+                                key=f"ocr_debug_text_{idx}"
+                            )
+                            
+                            # テキストの品質評価
+                            if char_count > 0:
+                                # 日本語文字の割合
+                                japanese_chars = sum(1 for c in ocr_text if '\u3040' <= c <= '\u309F' or '\u30A0' <= c <= '\u30FF' or '\u4E00' <= c <= '\u9FAF')
+                                japanese_ratio = japanese_chars / char_count * 100
+                                
+                                # 英数字の割合
+                                ascii_chars = sum(1 for c in ocr_text if c.isascii() and c.isalnum())
+                                ascii_ratio = ascii_chars / char_count * 100
+                                
+                                st.write("**📊 テキスト品質分析:**")
+                                quality_col1, quality_col2 = st.columns(2)
+                                with quality_col1:
+                                    st.write(f"日本語文字: {japanese_ratio:.1f}%")
+                                with quality_col2:
+                                    st.write(f"英数字: {ascii_ratio:.1f}%")
+                        else:
+                            st.warning("OCRテキストが抽出されませんでした")
+                        
+                        st.markdown("---")
+                else:
+                    st.info("OCR処理結果がありません。画像をアップロードして処理を実行してください。")
+        
         with st.expander("セッションステート抜粋 (AIチューター)", expanded=False):
             # 表示するキーをフィルタリング (チューニング関連と巨大データを除外)
             tutor_ss_display = {
@@ -188,8 +256,10 @@ with st.sidebar:
                 if not k.startswith("tuning_") and \
                    not k.startswith("editable_") and \
                    k not in ["common_params_initialized", "app_mode_selector_radio", 
-                              "show_img_debug_tutor_cb", "last_debug_images_tutor_run_final_v3",
-                              "tuning_fixed_cv_params", "tuning_fixed_other_params"] # これらは別で表示/管理
+                              "show_img_debug_tutor_cb", "show_ocr_debug_tutor_cb", 
+                              "show_ocr_debug_tuning_cb", "last_debug_images_tutor_run_final_v3",
+                              "tuning_fixed_cv_params", "tuning_fixed_other_params",
+                              "processed_image_details_list", "tuning_last_ocr_results"] # これらは別で表示/管理
             }
             if "uploaded_file_data" in tutor_ss_display and tutor_ss_display["uploaded_file_data"] is not None:
                 if isinstance(tutor_ss_display["uploaded_file_data"], dict):
@@ -214,6 +284,63 @@ with st.sidebar:
 
     elif st.session_state.app_mode == "画像処理チューニング":
         st.header("デバッグ情報 (チューニング)")
+        
+        # チューニングモードでのOCR結果デバッグ表示チェックボックス
+        show_ocr_debug_tuning = st.checkbox(
+            "OCR結果詳細表示 (チューニングモード)", 
+            value=st.session_state.get("show_ocr_debug_in_tuning_mode", False),
+            key="show_ocr_debug_tuning_cb"
+        )
+        st.session_state.show_ocr_debug_in_tuning_mode = show_ocr_debug_tuning
+        
+        # OCR結果詳細表示（チューニングモード）
+        if st.session_state.show_ocr_debug_in_tuning_mode:
+            with st.expander("OCR結果詳細 (チューニングモード)", expanded=False):
+                # チューニングモードでの最新のOCR結果を表示
+                if st.session_state.get("tuning_last_ocr_results"):
+                    st.subheader("🔍 最新のOCR処理結果 (チューニング)")
+                    ocr_results = st.session_state.tuning_last_ocr_results
+                    
+                    if isinstance(ocr_results, list):
+                        for idx, img_info in enumerate(ocr_results):
+                            filename = img_info.get("original_filename", f"画像_{idx+1}")
+                            img_type = img_info.get("image_type", "不明")
+                            ocr_text = img_info.get("ocr_text", "")
+                            
+                            st.write(f"**📄 {filename}** (種別: {img_type})")
+                            
+                            if ocr_text:
+                                # 文字数と行数の統計
+                                char_count = len(ocr_text)
+                                line_count = len(ocr_text.split('\n'))
+                                word_count = len(ocr_text.split())
+                                
+                                col1, col2, col3 = st.columns(3)
+                                with col1:
+                                    st.metric("文字数", char_count)
+                                with col2:
+                                    st.metric("行数", line_count)
+                                with col3:
+                                    st.metric("単語数", word_count)
+                                
+                                # OCRテキストの表示
+                                st.text_area(
+                                    f"抽出テキスト ({filename})",
+                                    value=ocr_text,
+                                    height=150,
+                                    disabled=True,
+                                    key=f"ocr_debug_tuning_text_{idx}"
+                                )
+                            else:
+                                st.warning("OCRテキストが抽出されませんでした")
+                            
+                            st.markdown("---")
+                    else:
+                        st.write("OCR結果の形式が予期しないものです")
+                        st.json(ocr_results)
+                else:
+                    st.info("OCR処理結果がありません。画像をアップロードして処理を実行してください。")
+        
         with st.expander("編集中のCVパラメータ (チューニング)", expanded=False):
             st.json(st.session_state.get("tuning_editable_cv_params", {}))
         with st.expander("編集中のその他パラメータ (チューニング)", expanded=False):
