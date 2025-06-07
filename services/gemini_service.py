@@ -410,6 +410,12 @@ def generate_explanation_llm(
     期待するプレースホルダ: {clarified_request}, {request_category}, {explanation_style}, 
                          {problem_context_summary}, {relevant_context}, {conversation_history}, {guidance_plan}
     """
+    print("DEBUG: generate_explanation_llm - 関数開始")
+    print(f"DEBUG: generate_explanation_llm - clarified_request: '{clarified_request}'")
+    print(f"DEBUG: generate_explanation_llm - request_category: '{request_category}'")
+    print(f"DEBUG: generate_explanation_llm - explanation_style: '{explanation_style}'")
+    print(f"DEBUG: generate_explanation_llm - guidance_plan: '{guidance_plan[:200] if guidance_plan else 'None'}...'")
+    
     prompt_template = load_prompt_template(config_loader.PROMPT_KEY_GENERATE_EXPLANATION)
     if prompt_template is None:
         return f"システムエラー: 解説生成プロンプト '{config_loader.PROMPT_KEY_GENERATE_EXPLANATION}' を読み込めませんでした。"
@@ -423,6 +429,9 @@ def generate_explanation_llm(
     problem_summary_to_pass = problem_context_summary if problem_context_summary else "（問題文の特定情報なし）"
     guidance_plan_to_pass = guidance_plan if guidance_plan else "（指導計画なし。AIの判断で解説を進めてください。）"
 
+    print(f"DEBUG: generate_explanation_llm - guidance_plan_to_pass: '{guidance_plan_to_pass[:200]}...'")
+    print(f"DEBUG: generate_explanation_llm - problem_summary_to_pass: '{problem_summary_to_pass[:200] if problem_summary_to_pass else 'None'}...'")
+
     try:
         prompt = prompt_template.format(
             clarified_request=clarified_request,
@@ -433,23 +442,29 @@ def generate_explanation_llm(
             conversation_history=history_text_for_prompt,
             guidance_plan=guidance_plan_to_pass
         )
+        print(f"DEBUG: generate_explanation_llm - フォーマット済みプロンプト (先頭500文字): '{prompt[:500]}...'")
     except KeyError as e:
         template_key_name = config_loader.PROMPT_KEY_GENERATE_EXPLANATION
         error_message = f"システムエラー: プロンプト '{template_key_name}' のフォーマットに失敗しました。プレースホルダ {e} が不足しています。"
         print(f"KeyError during prompt formatting for {template_key_name}: Missing key {e}")
         return error_message
 
+    print("DEBUG: generate_explanation_llm - Gemini API呼び出し開始")
     response_text = call_gemini_api(
         prompt,
         model_name=TEXT_MODEL_NAME,
         is_json_output=False
     )
+    print(f"DEBUG: generate_explanation_llm - Gemini API応答 (先頭500文字): '{str(response_text)[:500] if response_text else 'None'}...'")
 
     if response_text is None or isinstance(response_text, dict):
          print(f"Warning: generate_explanation_llm received None or dict: {response_text}")
          return "AIが解説を生成できませんでした。お手数ですが、もう一度お試しください。"
     
-    return response_text.strip()
+    final_response = response_text.strip()
+    print(f"DEBUG: generate_explanation_llm - 最終応答 (先頭500文字): '{final_response[:500]}...'")
+    print("DEBUG: generate_explanation_llm - 関数終了")
+    return final_response
 
 def generate_followup_response_llm(
         conversation_history: List[ChatMessage],
@@ -589,23 +604,24 @@ def plan_guidance_llm(
     Returns:
         Optional[str]: LLMが生成した指導計画テキスト、またはエラーメッセージ。
     """
-    prompt_template = load_prompt_template(config_loader.PROMPT_KEY_PLAN_GUIDANCE)  # config.yamlにキー追加が必要
+    # print("DEBUG: plan_guidance_llm - 関数開始")
+    # print(f"DEBUG: plan_guidance_llm - clarified_request: '{clarified_request[:100] if clarified_request else 'None'}...'")
+    # print(f"DEBUG: plan_guidance_llm - problem_context_summary: '{problem_context_summary[:100] if problem_context_summary else 'None'}...'")
+    # print(f"DEBUG: plan_guidance_llm - conversation_history length: {len(conversation_history) if conversation_history else 0}")
+
+    # print("DEBUG: plan_guidance_llm - プロンプトテンプレート読み込み開始")
+    # print(f"DEBUG: plan_guidance_llm - 使用するテンプレートキー: '{config_loader.PROMPT_KEY_PLAN_GUIDANCE}'")
+    
+    prompt_template = load_prompt_template(config_loader.PROMPT_KEY_PLAN_GUIDANCE)
+    
     if prompt_template is None:
-        # load_prompt_template 内でエラーログは出力される
         return f"システムエラー: 指導計画プロンプト '{config_loader.PROMPT_KEY_PLAN_GUIDANCE}' を読み込めませんでした。"
 
-    # 会話履歴のサマリーを生成 (プロンプトの指示に合わせて調整)
-    # ここでは、直近数ターンや重要なやり取りを抽出するロジックを想定。
-    # 簡単のため、ここでは全履歴を整形して渡すが、長すぎる場合は要約が必要。
     history_summary_for_prompt = _format_conversation_history_for_prompt(
         conversation_history,
         default_empty_message="（これまでの会話はありません）",
-        exclude_system_messages=True  # システムメッセージは通常不要
+        exclude_system_messages=True
     )
-    # トークン数削減のため、会話履歴は最新N件などに絞ることも検討
-    # MAX_HISTORY_TOKENS = 1000 # 例
-    # if len(history_summary_for_prompt) > MAX_HISTORY_TOKENS:
-    #     history_summary_for_prompt = history_summary_for_prompt[-MAX_HISTORY_TOKENS:] + "... (一部省略)"
 
     problem_summary_to_pass = problem_context_summary if problem_context_summary else "（問題文の特定情報なし）"
 
@@ -621,10 +637,9 @@ def plan_guidance_llm(
         print(f"KeyError during prompt formatting for {template_key_name}: Missing key {e}")
         return error_message
 
-    # 指導計画は通常テキスト形式（箇条書き）を期待するため、is_json_output=False
     response_text = call_gemini_api(
         prompt,
-        model_name=TEXT_MODEL_NAME,  # テキストモデルで十分
+        model_name=TEXT_MODEL_NAME,
         is_json_output=False
     )
 

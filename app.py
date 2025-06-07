@@ -5,6 +5,9 @@ from dotenv import load_dotenv
 import google.generativeai as genai
 import copy # deepcopyのため
 
+# Deepnote環境対応
+from deepnote_setup import setup_deepnote_environment, load_environment_variables
+
 # coreモジュールのインポート (state_managerはデバッグ表示で一部使用)
 from core import state_manager
 
@@ -17,16 +20,26 @@ from ui.tuning_mode_ui import render_tuning_mode
 from ui.display_helpers import display_debug_images_app
 
 # --- 初期設定 ---
+# Deepnote環境のセットアップ
+setup_deepnote_environment()
+
 load_dotenv()
+
+# Deepnote環境での環境変数チェック
+if not load_environment_variables():
+    st.stop()
+
 API_KEY = os.getenv("GEMINI_API_KEY")
 
 if not API_KEY:
-    st.error("Gemini APIキーが設定されていません。.envファイルを確認してください。")
+    st.error("⚠️ Gemini APIキーが設定されていません。")
+    st.error("Deepnoteの Project Settings > Environment variables で GEMINI_API_KEY を設定してください。")
     st.stop()
 try:
     genai.configure(api_key=API_KEY)
+    st.success("✅ Gemini API接続成功")
 except Exception as e:
-    st.error(f"Gemini APIの設定に失敗しました: {e}")
+    st.error(f"❌ Gemini APIの設定に失敗しました: {e}")
     st.stop()
 
 # --- Streamlit UI設定 ---

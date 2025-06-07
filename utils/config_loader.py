@@ -14,6 +14,7 @@ PROMPT_KEY_GENERATE_EXPLANATION: str = "generate_explanation"
 PROMPT_KEY_GENERATE_FOLLOWUP: str = "generate_followup"
 PROMPT_KEY_GENERATE_SUMMARY: str = "generate_summary"
 PROMPT_KEY_ANALYZE_STUDENT_PERFORMANCE: str = "analyze_student_performance"
+PROMPT_KEY_PLAN_GUIDANCE = "plan_guidance"  # 指導計画プロンプト用のキー
 
 CONFIG_FILE_PATH = Path(__file__).parent.parent / "config.yaml"
 CONFIG_PATH = CONFIG_FILE_PATH  # 互換性のため

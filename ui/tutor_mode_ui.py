@@ -24,6 +24,7 @@ def render_tutor_mode():
     """AIチューターモードのUIとロジックをレンダリングします。"""
     st.title("AI学習チューター プロトタイプ")
 
+
     # AIチューターモード用の初期化 (app.pyから移動、呼び出し時に tutor_initialized フラグで制御される想定)
     # この初期化は app.py のモード切り替え時に tutor_initialized = False とすることで再実行される
     if not st.session_state.get("tutor_initialized", False): # 既に app.py で設定されているはず
@@ -89,7 +90,150 @@ def render_tutor_mode():
         else:
             st.sidebar.info("利用可能なデモケースが `demo_cases` フォルダに見つかりません。")
         st.sidebar.markdown("---")
-    # --- ここまでデモケース選択UI ---
+        
+        # ★★★ 新規追加: デバッグ情報表示セクション ★★★
+        st.header("🔍 デバッグ情報")
+        
+        # セッション状態の基本情報
+        with st.expander("📊 セッション状態", expanded=False):
+            st.write(f"**現在のステップ:** {state_manager.get_current_step()}")
+            st.write(f"**処理中:** {st.session_state.get('processing', False)}")
+            st.write(f"**リクエスト曖昧性:** {st.session_state.get('is_request_ambiguous', 'N/A')}")
+            st.write(f"**明確化試行回数:** {st.session_state.get('clarification_attempts', 0)}")
+            st.write(f"**チューター初期化済み:** {st.session_state.get('tutor_initialized', False)}")
+            
+            clarified_req = st.session_state.get('clarified_request_text', 'Not Set')
+            if clarified_req and clarified_req != 'Not Set':
+                st.text_area("明確化されたリクエスト:", value=clarified_req, height=100, disabled=True)
+            else:
+                st.write("**明確化されたリクエスト:** 未設定")
+        
+        # 初期分析結果
+        if st.session_state.get("initial_analysis_result"):
+            with st.expander("🔍 初期分析結果", expanded=False):
+                analysis_result = st.session_state.initial_analysis_result
+                st.json(analysis_result)
+        
+        # OCR結果と画像情報
+        if st.session_state.get("current_problem_context"):
+            with st.expander("📷 OCR結果・画像情報", expanded=False):
+                problem_ctx = st.session_state.current_problem_context
+                
+                # OCR結果
+                if problem_ctx.get("ocr_results"):
+                    st.subheader("OCR抽出テキスト:")
+                    for i, ocr_result in enumerate(problem_ctx["ocr_results"]):
+                        st.write(f"**画像 {i+1} ({ocr_result.get('filename', 'Unknown')}):**")
+                        st.write(f"画像種別: {ocr_result.get('image_type', 'Unknown')}")
+                        st.text_area(f"抽出テキスト {i+1}:", value=ocr_result.get("extracted_text", ""), height=150, disabled=True)
+                
+                # 処理済み画像の表示
+                if problem_ctx.get("processed_images"):
+                    st.subheader("処理済み画像:")
+                    for i, img_info in enumerate(problem_ctx["processed_images"]):
+                        st.write(f"**画像 {i+1}: {img_info.get('filename', 'Unknown')}**")
+                        try:
+                            img_bytes = img_info.get("processed_bytes")
+                            if img_bytes:
+                                img = Image.open(BytesIO(img_bytes))
+                                st.image(img, caption=f"処理済み画像 {i+1}", use_column_width=True)
+                            else:
+                                st.write("画像データが利用できません")
+                        except Exception as e:
+                            st.error(f"画像表示エラー: {e}")
+        
+        # 指導計画
+        if st.session_state.get("current_guidance_plan"):
+            with st.expander("📋 指導計画", expanded=False):
+                guidance_plan = st.session_state.current_guidance_plan
+                st.text_area("生成された指導計画:", value=guidance_plan, height=200, disabled=True)
+        
+        # 生成された解説
+        if st.session_state.get("current_explanation"):
+            with st.expander("📝 生成された解説", expanded=False):
+                explanation = st.session_state.current_explanation
+                st.text_area("解説内容:", value=explanation, height=200, disabled=True)
+        
+        # 会話履歴の詳細
+        if st.session_state.get("messages"):
+            with st.expander("💬 会話履歴詳細", expanded=False):
+                st.write(f"**総メッセージ数:** {len(st.session_state.messages)}")
+                for i, msg in enumerate(st.session_state.messages):
+                    role_emoji = {"user": "👤", "assistant": "🤖", "system": "⚙️"}.get(msg["role"], "❓")
+                    st.write(f"{role_emoji} **{msg['role']} #{i+1}:**")
+                    content = msg.get("content", "")
+                    if isinstance(content, dict):
+                        st.json(content)
+                    else:
+                        st.text_area(f"内容 #{i+1}:", value=str(content)[:500] + ("..." if len(str(content)) > 500 else ""), height=80, disabled=True)
+                    st.markdown("---")
+        
+        # 明確化履歴
+        if st.session_state.get("clarification_history"):
+            with st.expander("❓ 明確化履歴", expanded=False):
+                st.write(f"**明確化メッセージ数:** {len(st.session_state.clarification_history)}")
+                for i, msg in enumerate(st.session_state.clarification_history):
+                    role_emoji = {"user": "👤", "assistant": "🤖"}.get(msg["role"], "❓")
+                    st.write(f"{role_emoji} **{msg['role']} #{i+1}:**")
+                    st.text_area(f"明確化内容 #{i+1}:", value=msg.get("content", ""), height=80, disabled=True)
+                    st.markdown("---")
+        
+        # パフォーマンス分析
+        if st.session_state.get("student_performance_analysis"):
+            with st.expander("📈 学習分析結果", expanded=False):
+                analysis = st.session_state.student_performance_analysis
+                st.text_area("分析結果:", value=analysis, height=150, disabled=True)
+        
+        # セッション要約
+        if st.session_state.get("session_summary"):
+            with st.expander("📋 セッション要約", expanded=False):
+                summary = st.session_state.session_summary
+                st.text_area("要約内容:", value=summary, height=150, disabled=True)
+                
+        # エラーログとシステムログ
+        with st.expander("🚨 システムログ・エラー情報", expanded=False):
+            # セッション中のエラーがあれば表示
+            error_messages = []
+            if st.session_state.get("messages"):
+                for msg in st.session_state.messages:
+                    content = msg.get("content", "")
+                    if isinstance(content, str) and ("エラー" in content or "システムエラー" in content):
+                        error_messages.append(content)
+            
+            if error_messages:
+                st.subheader("🚨 検出されたエラー:")
+                for i, error in enumerate(error_messages):
+                    st.error(f"エラー #{i+1}: {error}")
+            else:
+                st.success("現在エラーは検出されていません")
+            
+            # デバッグ用の重要な状態変数一覧
+            st.subheader("🔍 重要な状態変数:")
+            debug_vars = {
+                "tutor_initialized": st.session_state.get("tutor_initialized", False),
+                "user_query_text": st.session_state.get("user_query_text", "N/A"),
+                "selected_explanation_style": st.session_state.get("selected_explanation_style", "N/A"),
+                "show_new_question_form": st.session_state.get("show_new_question_form", False),
+                "demo_case_loaded": bool(st.session_state.get("demo_case_loaded_images")),
+                "messages_count": len(st.session_state.get("messages", [])),
+            }
+            
+            for var_name, var_value in debug_vars.items():
+                st.write(f"**{var_name}:** {var_value}")
+                
+        # システム設定情報
+        with st.expander("⚙️ システム設定", expanded=False):
+            st.write(f"**最大明確化試行回数:** {MAX_CLARIFICATION_ATTEMPTS}")
+            st.write(f"**アプリケーション設定:**")
+            if APP_CONFIG:
+                # 機密情報は除外して表示
+                safe_config = dict(APP_CONFIG)
+                if "api_keys" in safe_config:
+                    safe_config["api_keys"] = "***Hidden***"
+                st.json(safe_config)
+            else:
+                st.write("設定情報を読み込めませんでした")
+    # --- ここまでデバッグ情報表示セクション ---
 
     current_step_tutor_main_final = state_manager.get_current_step()
     message_container_tutor_main = st.container(border=False)
@@ -105,6 +249,16 @@ def render_tutor_mode():
                                 content_tutor_main["data"], 
                                 content_tutor_main.get("title", f"分析結果 {i_tutor_main_msg}")
                             )
+                        elif content_tutor_main["type"] == "guidance_plan":
+                            # 指導計画の特別表示
+                            title = content_tutor_main.get("title", "📋 指導計画")
+                            plan_data = content_tutor_main.get("data", "")
+                            st.subheader(title)
+                            st.info("以下の計画に従って解説を進めます：")
+                            st.text_area("指導計画詳細:", value=plan_data, height=200, disabled=True)
+                        else:
+                            # その他のシステムメッセージ
+                            st.json(content_tutor_main)
                     elif isinstance(content_tutor_main, str):
                         st.markdown(content_tutor_main)
                     else:
@@ -112,6 +266,25 @@ def render_tutor_mode():
 
     if not st.session_state.get("messages") and current_step_tutor_main_final == state_manager.STEP_INPUT_SUBMISSION:
         st.info("AI学習チューターへようこそ！下の入力欄から質問をどうぞ。")
+    
+    # メイン画面でのシンプルなデバッグ情報表示
+    if st.session_state.get("messages") or current_step_tutor_main_final != state_manager.STEP_INPUT_SUBMISSION:
+        with st.expander("🔧 現在の状態とシステム情報", expanded=False):
+            col1, col2 = st.columns(2)
+            with col1:
+                st.write(f"**現在のステップ:** {current_step_tutor_main_final}")
+                st.write(f"**処理中:** {'はい' if st.session_state.get('processing', False) else 'いいえ'}")
+                st.write(f"**明確化済み:** {'はい' if st.session_state.get('clarified_request_text') else 'いいえ'}")
+            with col2:
+                st.write(f"**指導計画:** {'生成済み' if st.session_state.get('current_guidance_plan') else '未生成'}")
+                st.write(f"**解説:** {'生成済み' if st.session_state.get('current_explanation') else '未生成'}")
+                st.write(f"**画像処理:** {'完了' if st.session_state.get('current_problem_context') else '未実行'}")
+                
+            # 処理されたトークン数や処理時間などの情報があれば表示
+            if st.session_state.get("processing_stats"):
+                stats = st.session_state.processing_stats
+                st.write("**処理統計:**")
+                st.json(stats)
 
     # 1. ユーザー入力受付 (AIチューターモード)
     if current_step_tutor_main_final == state_manager.STEP_INPUT_SUBMISSION or \
@@ -305,13 +478,16 @@ def render_tutor_mode():
                 else:
                     state_manager.store_initial_analysis_result(analysis_result_ia_f)
                     state_manager.add_message("system", {"type": "analysis_result", "data": dict(analysis_result_ia_f), "title": "AIによる初期分析"})
-                    if st.session_state.is_request_ambiguous:
+                    if st.session_state.is_request_ambiguous: # 曖昧な場合
+                        st.session_state.clarification_attempts = 0 # リセット
                         state_manager.set_current_step(state_manager.STEP_CLARIFICATION_NEEDED)
-                    else:
-                        state_manager.add_message("assistant", "ご質問内容を理解しました。どのようなスタイルの解説がご希望ですか？")
-                        state_manager.set_current_step(state_manager.STEP_SELECT_STYLE)
+                    else: # ★明確化が不要な場合★
+                        # clarified_request_text を設定 (初期分析のサマリーまたは元のクエリ)
+                        st.session_state.clarified_request_text = analysis_result_ia_f.get("summary", st.session_state.user_query_text)
+                        # 指導計画立案ステップへ遷移
+                        state_manager.set_current_step(state_manager.STEP_PLAN_GUIDANCE)
                 st.rerun()
-            else:
+            else: # analysis_result_ia_f is None
                 st.error("分析処理で予期せぬエラーが発生しました。")
                 state_manager.add_message("system", "エラー(初期分析): 結果がNone。")
                 state_manager.set_current_step(state_manager.STEP_INPUT_SUBMISSION)
@@ -393,7 +569,11 @@ def render_tutor_mode():
             if exp_tutor_f and "エラー" not in exp_tutor_f:
                 state_manager.store_generated_explanation(exp_tutor_f)
                 # 解説が生成されたら、それを表示するためにメッセージとして追加
-                # state_manager.add_message("assistant", exp_tutor_f) # tutor_logic側でやるかここでやるか検討
+                # 重複を防ぐため、既に同じ解説が最後のメッセージにない場合のみ追加
+                if (not st.session_state.messages or 
+                    st.session_state.messages[-1]["role"] != "assistant" or 
+                    st.session_state.messages[-1]["content"] != exp_tutor_f):
+                    state_manager.add_message("assistant", exp_tutor_f)
                 state_manager.set_current_step(state_manager.STEP_FOLLOW_UP_LOOP)
             else:
                 err_msg_exp_f2 = exp_tutor_f or "解説生成エラー。"
@@ -466,10 +646,11 @@ def render_tutor_mode():
             state_manager.add_message("user", user_chat_input)
             
             if current_step_tutor_main_final == state_manager.STEP_CLARIFICATION_NEEDED:
-                # ★明確化応答の分析を完全にスキップし、ユーザー応答を clarified_request_text に直接セットして次のステップへ★
                 st.session_state.clarified_request_text = user_chat_input
-                st.session_state.is_request_ambiguous = False # 応答があった時点で曖昧さ解消とみなす
+                st.session_state.is_request_ambiguous = False 
                 state_manager.add_clarification_history_message("user", user_chat_input)
+                
+                print(f"[UI_DEBUG] Transitioning to PLAN_GUIDANCE. Clarified request: '{st.session_state.clarified_request_text}'") # ★デバッグ追加 (コンソール出力)
                 state_manager.set_current_step(state_manager.STEP_PLAN_GUIDANCE)
                 st.rerun()
 
@@ -486,3 +667,32 @@ def render_tutor_mode():
                     state_manager.add_message("system", f"エラー(フォローアップ): {error_msg_fu}")
                     state_manager.add_message("assistant", "申し訳ありません、応答の準備中に問題が発生しました。")
                 st.rerun()
+
+    elif current_step_tutor_main_final == state_manager.STEP_PLAN_GUIDANCE:
+        if st.session_state.current_guidance_plan is None and not st.session_state.get("processing", False):
+            if not st.session_state.get("clarified_request_text"):
+                initial_summary = st.session_state.initial_analysis_result.get("summary") if st.session_state.initial_analysis_result else None
+                st.session_state.clarified_request_text = initial_summary or st.session_state.user_query_text
+                print(f"[TutorModeUI-PLAN_GUIDANCE] Warning: clarified_request_text was not set. Using fallback: {st.session_state.clarified_request_text[:50]}")
+
+            state_manager.set_processing_status(True)
+            with st.spinner("AIが指導計画を立案中です..."):
+                guidance_plan_result = tutor_logic.perform_guidance_planning_logic()
+            state_manager.set_processing_status(False)
+            
+            # 指導計画立案の結果を処理
+            if guidance_plan_result and "エラー" not in guidance_plan_result and "システムエラー:" not in guidance_plan_result:
+                # 成功の場合
+                state_manager.add_message("system", {"type": "guidance_plan", "data": guidance_plan_result, "title": "📋 AIによる指導計画"})
+                state_manager.set_current_step(state_manager.STEP_SELECT_STYLE)
+                st.rerun()
+            else:
+                # エラーの場合
+                error_msg_plan = guidance_plan_result or "指導計画の立案に失敗しました。"
+                state_manager.add_message("system", f"エラー(指導計画): {error_msg_plan}")
+                state_manager.add_message("assistant", "申し訳ありません、指導計画の立案中に問題が発生しました。解説スタイルを選択して続行いたします。")
+                state_manager.set_current_step(state_manager.STEP_SELECT_STYLE)
+                st.rerun()
+        else:
+            # 指導計画が既に生成済みまたは処理中の場合は何もしない
+            pass

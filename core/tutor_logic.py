@@ -125,16 +125,6 @@ def perform_initial_analysis_logic() -> Optional[InitialAnalysisResult]:
     return analysis_result
 
 
-# analyze_user_clarification_logic は削除またはコメントアウト
-# def analyze_user_clarification_logic(user_response: str) -> Optional[ClarificationAnalysisResult]:
-#     """
-#     [この関数は新しいフローでは使用されません]
-#     ユーザーの明確化応答を分析し、曖昧さが解消されたかを判定する。
-#     ... (元のdocstring) ...
-#     """
-#     # ... (元の実装) ...
-#     pass # または関数全体を削除
-
 
 def generate_clarification_question_logic() -> Optional[str]:
     """
@@ -239,14 +229,18 @@ def generate_explanation_logic() -> Optional[str]:
         print("Error in tutor_logic: Clarified request is missing for explanation generation.")
         return "解説を生成するためのリクエスト内容が確定していません。"
 
-    print(f"Tutor Logic: Generating explanation. Request: '{clarified_request[:50]}...', Style: {explanation_style}, ProblemCtx: {problem_context_summary_for_llm[:50] if problem_context_summary_for_llm else 'None'}")
+    # ★指導計画を取得★
+    current_guidance_plan = st.session_state.get("current_guidance_plan")
+    
+    print(f"Tutor Logic: Generating explanation. Request: '{clarified_request[:50]}...', Style: {explanation_style}, ProblemCtx: {problem_context_summary_for_llm[:50] if problem_context_summary_for_llm else 'None'}, GuidancePlan: {current_guidance_plan[:50] if current_guidance_plan else 'None'}")
     explanation_text = gemini_service.generate_explanation_llm(
         clarified_request=clarified_request,
         request_category=request_category,
         explanation_style=explanation_style,
         problem_context_summary=problem_context_summary_for_llm, # ★引数追加★
         relevant_context=relevant_context_ocr,
-        conversation_history=conversation_history_for_llm
+        conversation_history=conversation_history_for_llm,
+        guidance_plan=current_guidance_plan # ★指導計画を追加★
     )
     print(f"Tutor Logic: Generated explanation (first 100 chars): {str(explanation_text)[:100] if explanation_text else 'None'}")
     return explanation_text
@@ -363,40 +357,60 @@ def perform_guidance_planning_logic() -> Optional[str]:
         Optional[str]: 生成された指導計画のテキスト。エラー時はエラーメッセージ文字列。
                        Noneの場合はAPI呼び出し自体が失敗したことを示す。
     """
+    # print("DEBUG: perform_guidance_planning_logic - 関数開始")
+    
     clarified_request = st.session_state.get("clarified_request_text")
+    # print(f"DEBUG: perform_guidance_planning_logic - clarified_request_text: '{clarified_request}'")
+    
     if not clarified_request:
+        # print("DEBUG: perform_guidance_planning_logic - clarified_request_textが空なので、フォールバック処理開始")
         # 通常、UIロジックで clarified_request_text が設定されてからこの関数が呼ばれるはず
         # 例: ユーザーの明確化応答をそのまま clarified_request_text にセット
         initial_analysis_res = st.session_state.get("initial_analysis_result")
+        # print(f"DEBUG: perform_guidance_planning_logic - initial_analysis_result: {initial_analysis_res}")
+        
         if initial_analysis_res and initial_analysis_res.get("ambiguity") == "clear":
             clarified_request = initial_analysis_res.get("summary", st.session_state.user_query_text)
+            # print(f"DEBUG: perform_guidance_planning_logic - フォールバック1 (summary): '{clarified_request}'")
         else:
             clarified_request = st.session_state.user_query_text # フォールバックとして元のクエリ
+            # print(f"DEBUG: perform_guidance_planning_logic - フォールバック2 (user_query_text): '{clarified_request}'")
 
     if not clarified_request:
-        print("Error in tutor_logic (perform_guidance_planning_logic): Clarified request is missing.")
+        print("ERROR in tutor_logic (perform_guidance_planning_logic): Clarified request is missing.")
         return "指導計画を生成するためのリクエスト内容が不明です。"
 
+    # print("DEBUG: perform_guidance_planning_logic - 問題コンテキスト取得開始")
     current_problem_ctx: Optional[ProblemContext] = st.session_state.get("current_problem_context")
+    # print(f"DEBUG: perform_guidance_planning_logic - current_problem_context: {current_problem_ctx}")
+    
     problem_context_summary_for_llm = _create_problem_context_summary(current_problem_ctx)
+    # print(f"DEBUG: perform_guidance_planning_logic - problem_context_summary: '{problem_context_summary_for_llm}'")
 
     # 指導計画プロンプトには、ここまでの主要な会話履歴を渡す
     # `clarification_history` があればそれも考慮するが、メインは `messages`
     # 新しいフローでは `clarification_history` はあまり使われないかもしれない
+    # print("DEBUG: perform_guidance_planning_logic - 会話履歴取得開始")
     conversation_history_for_plan: List[ChatMessage] = []
     # if st.session_state.get("clarification_history"):
     #     conversation_history_for_plan.extend(st.session_state.clarification_history)
     # elif st.session_state.get("messages"): # clarification_history が空なら messages を使う
     conversation_history_for_plan.extend(st.session_state.get("messages", []))
-
+    # print(f"DEBUG: perform_guidance_planning_logic - conversation_history length: {len(conversation_history_for_plan)}")
 
     print(f"Tutor Logic: Performing guidance planning. Clarified Request: '{clarified_request[:50]}...', ProblemCtx: {problem_context_summary_for_llm[:50] if problem_context_summary_for_llm else 'None'}")
 
-    guidance_plan_text = gemini_service.plan_guidance_llm(
+    # print("DEBUG: perform_guidance_planning_logic - gemini_service.plan_guidance_llm呼び出し直前")
+    try:
+        guidance_plan_text = gemini_service.plan_guidance_llm(
         clarified_request=clarified_request,
         problem_context_summary=problem_context_summary_for_llm,
         conversation_history=conversation_history_for_plan # gemini_service側でサマリー化を期待
     )
+        # print(f"DEBUG: perform_guidance_planning_logic - gemini_service.plan_guidance_llm呼び出し完了。結果: '{str(guidance_plan_text)[:100] if guidance_plan_text else 'None'}...'")
+    except Exception as e:
+        print(f"ERROR: perform_guidance_planning_logic - gemini_service.plan_guidance_llm呼び出し中に例外発生: {e}")
+        return f"指導計画の生成中にエラーが発生しました: {e}"
 
     if guidance_plan_text is None:
         # API呼び出し自体が失敗した場合 (gemini_service側でNoneが返るケース)
@@ -410,6 +424,8 @@ def perform_guidance_planning_logic() -> Optional[str]:
         return guidance_plan_text # エラーメッセージをそのまま返す
 
     # 正常に計画が生成された場合
+    # print("DEBUG: perform_guidance_planning_logic - 指導計画の保存開始")
     state_manager.store_guidance_plan(guidance_plan_text)
     print(f"Tutor Logic: Guidance plan generated and stored (first 100 chars): {guidance_plan_text[:100]}")
+    # print("DEBUG: perform_guidance_planning_logic - 関数正常終了")
     return guidance_plan_text # 生成された計画を返す (UI表示用)
