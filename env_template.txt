@@ -1,0 +1,9 @@
+# AI Tutor Streamlit App - 環境変数設定ファイル
+# このファイルを .env にリネームして使用してください
+
+# Gemini API Key (必須)
+GEMINI_API_KEY="your_gemini_api_key_here"
+
+# その他の設定（オプション）
+# DEBUG=True
+# LOG_LEVEL=INFO 
